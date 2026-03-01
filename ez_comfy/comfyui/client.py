@@ -224,11 +224,11 @@ class ComfyUIClient:
         outputs = []
         for node_id, node_output in history_entry.get("outputs", {}).items():
             for img in node_output.get("images", []):
-                outputs.append({"type": "image", **img})
+                outputs.append({**img, "media_type": "image"})
             for audio in node_output.get("audio", []):
-                outputs.append({"type": "audio", **audio})
+                outputs.append({**audio, "media_type": "audio"})
             for video in node_output.get("gifs", []):
-                outputs.append({"type": "video", **video})
+                outputs.append({**video, "media_type": "video"})
         return outputs
 
     async def close(self) -> None:

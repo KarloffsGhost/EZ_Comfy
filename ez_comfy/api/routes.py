@@ -99,10 +99,10 @@ def _build_generate_response(result, base_url: str) -> GenerateResponse:
     for out in result.outputs:
         fn = out.get("filename", "")
         sf = out.get("subfolder", "")
-        tp = out.get("type", "output")
+        tp = out.get("type", "output")   # ComfyUI's folder type — needed for /view URL
         url = f"{base_url}/view?filename={fn}&subfolder={sf}&type={tp}"
         outputs.append(OutputFile(
-            type=out.get("type", "image"),
+            type=out.get("media_type", "image"),  # our semantic type — image/audio/video
             filename=fn,
             subfolder=sf,
             url=url,
