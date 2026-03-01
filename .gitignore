@@ -25,8 +25,7 @@ config/settings.yaml
 # Generated outputs
 output/
 
-# Screenshot assets — remove these lines once you've added real screenshots
-# and want them committed to git
+# Remove this line once you've added assets/screenshot-ui.png
 assets/screenshot-*.png
 
 # IDE

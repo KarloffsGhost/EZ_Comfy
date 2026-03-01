@@ -134,8 +134,6 @@ LoRAs       : 3
 Capabilities: ['ControlNetLoader', 'IPAdapterModelLoader', ...]
 ```
 
-![EZ Comfy CLI check output](assets/screenshot-cli-check.png)
-<!-- Screenshot: run `python -m ez_comfy check` in a terminal. Capture the full output. Save as assets/screenshot-cli-check.png -->
 
 ### Generate from the command line
 
@@ -150,8 +148,6 @@ python -m ez_comfy serve --port 8088
 # Open http://127.0.0.1:8088
 ```
 
-![EZ Comfy web UI showing generation result](assets/screenshot-ui-result.png)
-<!-- Screenshot: generate an image from the web UI and capture the result panel showing the output image, recipe/checkpoint/seed metadata, and model recommendations. Save as assets/screenshot-ui-result.png -->
 
 ### Preview what would happen (no GPU used)
 
@@ -159,8 +155,6 @@ python -m ez_comfy serve --port 8088
 python -m ez_comfy plan "a portrait of an astronaut"
 ```
 
-![EZ Comfy plan output showing model selection reasoning](assets/screenshot-cli-plan.png)
-<!-- Screenshot: run `python -m ez_comfy plan "a portrait of an astronaut"` and capture the JSON output showing intent, recipe, checkpoint, params, and recommendations. Save as assets/screenshot-cli-plan.png -->
 
 ### See model recommendations
 
