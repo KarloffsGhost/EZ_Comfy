@@ -24,13 +24,10 @@ config/settings.yaml
 
 # Generated outputs
 output/
-*.png
-*.jpg
-*.jpeg
-*.webp
-*.mp4
-*.mp3
-*.wav
+
+# Screenshot assets — remove these lines once you've added real screenshots
+# and want them committed to git
+assets/screenshot-*.png
 
 # IDE
 .vscode/

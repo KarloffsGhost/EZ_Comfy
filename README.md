@@ -1,10 +1,19 @@
 # EZ Comfy
 
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-135%20passing-brightgreen.svg)](tests/)
+[![ComfyUI](https://img.shields.io/badge/ComfyUI-API-orange.svg)](https://github.com/comfyanonymous/ComfyUI)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
+
 > **ComfyUI is incredibly powerful — and incredibly complex.** EZ Comfy sits in front of it so you don't have to.
 
 EZ Comfy is a hardware-aware orchestration layer for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). You type a prompt. It figures out the rest: which model fits your GPU, which workflow to use, what parameters to apply, and how to adapt your prompt for the model you're running.
 
 No node graphs. No hunting through documentation. No VRAM surprises.
+
+![EZ Comfy Web UI](assets/screenshot-ui.png)
+<!-- Screenshot: open http://127.0.0.1:8088, type a prompt, generate, capture the result. Save as assets/screenshot-ui.png -->
 
 ---
 
@@ -125,6 +134,9 @@ LoRAs       : 3
 Capabilities: ['ControlNetLoader', 'IPAdapterModelLoader', ...]
 ```
 
+![EZ Comfy CLI check output](assets/screenshot-cli-check.png)
+<!-- Screenshot: run `python -m ez_comfy check` in a terminal. Capture the full output. Save as assets/screenshot-cli-check.png -->
+
 ### Generate from the command line
 
 ```bash
@@ -138,11 +150,17 @@ python -m ez_comfy serve --port 8088
 # Open http://127.0.0.1:8088
 ```
 
+![EZ Comfy web UI showing generation result](assets/screenshot-ui-result.png)
+<!-- Screenshot: generate an image from the web UI and capture the result panel showing the output image, recipe/checkpoint/seed metadata, and model recommendations. Save as assets/screenshot-ui-result.png -->
+
 ### Preview what would happen (no GPU used)
 
 ```bash
 python -m ez_comfy plan "a portrait of an astronaut"
 ```
+
+![EZ Comfy plan output showing model selection reasoning](assets/screenshot-cli-plan.png)
+<!-- Screenshot: run `python -m ez_comfy plan "a portrait of an astronaut"` and capture the JSON output showing intent, recipe, checkpoint, params, and recommendations. Save as assets/screenshot-cli-plan.png -->
 
 ### See model recommendations
 
