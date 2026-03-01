@@ -1,0 +1,45 @@
+# EZ Comfy — settings example
+# Copy this file to config/settings.yaml and adjust for your system.
+# config/settings.yaml is gitignored so your personal paths stay local.
+
+comfyui:
+  # URL where ComfyUI is running. Default ComfyUI port is 8188.
+  base_url: "http://127.0.0.1:8188"
+
+  # Absolute path to your ComfyUI models directory.
+  # Windows example:  "C:/Users/you/ComfyUI/models"
+  # Linux example:    "/home/you/ComfyUI/models"
+  model_base_path: "/path/to/ComfyUI/models"
+
+  default_output_dir: "output"
+  timeout_seconds: 300
+
+ollama:
+  # Set enabled: false if you don't use Ollama. When enabled, EZ Comfy will
+  # unload Ollama models from VRAM before each generation and free them after,
+  # preventing VRAM conflicts between your LLM and ComfyUI.
+  base_url: "http://localhost:11434"
+  enabled: true
+
+llm:
+  # Optional LLM-enhanced prompt expansion (not required for core functionality).
+  enabled: false
+  provider: "ollama"
+  model: "llama3.2:3b"
+  base_url: "http://localhost:11434"
+  api_key_env: "OPENAI_API_KEY"   # env var name, only used if provider = openai
+
+preferences:
+  # Prefer Lightning / Turbo model variants when available (fewer steps, faster).
+  prefer_speed: true
+
+  # Automatically generate negative prompts appropriate for the model family.
+  auto_negative_prompt: true
+
+  max_resolution_multiplier: 1.5
+  default_batch_size: 1
+
+history:
+  max_entries: 100
+  save_metadata: true
+  save_thumbnails: true
