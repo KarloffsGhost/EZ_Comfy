@@ -25,8 +25,6 @@ config/settings.yaml
 # Generated outputs
 output/
 
-# Remove this line once you've added assets/screenshot-ui.png
-assets/screenshot-*.png
 
 # IDE
 .vscode/
