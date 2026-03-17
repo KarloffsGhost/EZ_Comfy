@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from ez_comfy.api.models import (
@@ -197,22 +197,66 @@ async def plan(request: Request, body: PlanRequest) -> PlanResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/v1/plan/workflow")
-async def export_workflow(request: Request, body: PlanRequest) -> JSONResponse:
+async def export_workflow(
+    request: Request,
+    body: PlanRequest,
+    provenance: str = Query(
+        "summary",
+        description=(
+            "Provenance inclusion level: "
+            "'summary' injects a Note node with human-readable provenance (default), "
+            "'full' adds Note node + machine-readable JSON key, "
+            "'none' returns raw workflow without provenance."
+        ),
+    ),
+) -> JSONResponse:
     """Plan and compose the ComfyUI workflow, returning it as a downloadable JSON file."""
     import json
     from fastapi.responses import Response as _Resp
-    from ez_comfy.workflows.composer import compose_workflow
+    from ez_comfy.workflows.composer import compose_annotated_workflow, compose_workflow
+
+    if provenance not in ("summary", "full", "none"):
+        raise HTTPException(status_code=400, detail="provenance must be 'summary', 'full', or 'none'")
 
     engine = _engine(request)
     gen_req = _api_request_to_gen_request(body)
     plan = await engine.plan_only(gen_req)
-    workflow = compose_workflow(plan)
+
+    if provenance == "none":
+        workflow = compose_workflow(plan)
+    elif provenance == "full":
+        workflow = compose_annotated_workflow(plan)
+        workflow["_ez_comfy_provenance"] = plan.provenance.to_dict()
+    else:  # "summary" (default)
+        workflow = compose_annotated_workflow(plan)
+
     filename = f"{plan.recipe.id}_{plan.checkpoint_family}_workflow.json"
     return _Resp(
         content=json.dumps(workflow, indent=2),
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/v1/history/{prompt_id}/provenance")
+async def get_provenance(request: Request, prompt_id: str) -> JSONResponse:
+    """Return provenance record for a completed generation, read from sidecar JSON."""
+    import json
+    from pathlib import Path
+
+    settings = request.app.state.settings
+    meta_dir = Path(settings.comfyui.output_dir) / "ez_comfy_meta"
+    sidecar_path = meta_dir / f"{prompt_id}.json"
+
+    if not sidecar_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No provenance record found for prompt_id={prompt_id!r}. "
+                   "Sidecar metadata is written after generation completes.",
+        )
+
+    data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    return JSONResponse(content=data.get("provenance", {}))
 
 
 # ---------------------------------------------------------------------------
@@ -691,8 +735,23 @@ _UI_HTML = """\
   .rec-card { background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; padding: .5rem .75rem; font-size: .78rem; }
   .rec-card .rec-name { font-weight: 600; color: #ccc; }
   .rec-card .rec-detail { color: #666; font-size: .7rem; margin-top: .15rem; }
-  .rec-card.installed .rec-name::after { content: " ✓"; color: #4caf50; }
+  .rec-card.installed .rec-name::after { content: " \u2713"; color: #4caf50; }
   .rec-card.not-installed .rec-name::after { content: " (not installed)"; color: #888; font-weight: 400; font-size: .7rem; }
+  /* Provenance panel */
+  #provenance-section { display: none; margin-top: .75rem; }
+  #provenance-section details { background: #0d1a0d; border: 1px solid #1a3a1a; border-radius: 8px; padding: .6rem .75rem; }
+  #provenance-section summary { cursor: pointer; font-size: .82rem; color: #5c9; font-weight: 600; user-select: none; }
+  #provenance-section summary::marker { color: #5c9; }
+  .prov-table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .74rem; }
+  .prov-table td { padding: .2rem .4rem; vertical-align: top; }
+  .prov-table tr:nth-child(even) td { background: #111f11; }
+  .prov-param { color: #8c8; font-weight: 600; white-space: nowrap; }
+  .prov-value { color: #ddd; }
+  .prov-source { color: #555; font-size: .68rem; white-space: nowrap; }
+  .prov-reason { color: #666; font-size: .68rem; }
+  .prov-rejected { margin-top: .4rem; }
+  .prov-rejected summary { font-size: .72rem; color: #666; cursor: pointer; }
+  .prov-rejected ul { margin: .3rem 0 0 1rem; padding: 0; font-size: .68rem; color: #664; }
   .how-to-get { display: inline-block; margin-top: .3rem; font-size: .7rem; color: #6c63ff; cursor: pointer; text-decoration: underline; }
   #err-msg { display: none; background: #200; border: 1px solid #500; border-radius: 6px; padding: .5rem .75rem; color: #f66; font-size: .8rem; }
 </style>
@@ -848,6 +907,18 @@ _UI_HTML = """\
 
   <!-- Plan output -->
   <div id="plan-section"><h2>Generation Plan</h2><pre id="plan-pre"></pre></div>
+
+  <!-- Provenance panel -->
+  <div id="provenance-section">
+    <details>
+      <summary>What EZ Comfy decided for you</summary>
+      <table class="prov-table" id="prov-table"></table>
+      <details class="prov-rejected" id="prov-rejected-wrap" style="display:none">
+        <summary>Alternatives considered</summary>
+        <ul id="prov-rejected-list"></ul>
+      </details>
+    </details>
+  </div>
 
   <!-- Install assistant output -->
   <div id="install-section" style="display:none" class="section">
@@ -1006,6 +1077,39 @@ function renderOutput(result, baseUrl) {
   });
 }
 
+function renderProvenance(provenance) {
+  const sec = document.getElementById('provenance-section');
+  if (!provenance || !provenance.decisions || !provenance.decisions.length) {
+    sec.style.display = 'none'; return;
+  }
+  sec.style.display = 'block';
+  const table = document.getElementById('prov-table');
+  table.innerHTML = '';
+  const allAlternatives = [];
+  provenance.decisions.forEach(d => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="prov-param">${d.parameter}</td>
+      <td class="prov-value">${d.chosen_value}</td>
+      <td class="prov-source">[${d.source}]</td>
+      <td class="prov-reason">${d.reason}</td>`;
+    table.appendChild(tr);
+    (d.alternatives || []).forEach(a => allAlternatives.push(a));
+  });
+  const rejWrap = document.getElementById('prov-rejected-wrap');
+  const rejList = document.getElementById('prov-rejected-list');
+  if (allAlternatives.length) {
+    rejWrap.style.display = '';
+    rejList.innerHTML = '';
+    allAlternatives.forEach(a => {
+      const li = document.createElement('li');
+      li.textContent = `${a.value} \u2014 ${a.rejected_reason}`;
+      rejList.appendChild(li);
+    });
+  } else {
+    rejWrap.style.display = 'none';
+  }
+}
+
 function renderRecs(recs) {
   const sec = document.getElementById('recs-section');
   const list = document.getElementById('recs-list');
@@ -1037,6 +1141,7 @@ async function doGenerate() {
   setGenerating(true);
   document.getElementById('outputs').innerHTML = '';
   document.getElementById('plan-section').style.display = 'none';
+  document.getElementById('provenance-section').style.display = 'none';
   showWarnings([]);
 
   try {
@@ -1076,6 +1181,7 @@ function pollJob(jobId) {
         renderOutput(job.result, comfyBase);
         showWarnings(job.result.warnings);
         renderRecs(null);
+        renderProvenance(job.result.plan_summary && job.result.plan_summary.provenance);
       } else if (job.status === 'error') {
         clearInterval(_polling);
         showError('Generation failed: ' + (job.error || 'Unknown error'));
@@ -1165,6 +1271,7 @@ async function doPlan() {
     document.getElementById('plan-pre').textContent = JSON.stringify(plan, null, 2);
     showWarnings(plan.warnings);
     renderRecs(plan.recommendations);
+    renderProvenance(plan.provenance);
   } catch (e) {
     showError(e.message);
   }
@@ -1204,6 +1311,7 @@ function doClear() {
   document.getElementById('install-section').style.display = 'none';
   document.getElementById('recs-section').style.display = 'none';
   document.getElementById('progress-section').style.display = 'none';
+  document.getElementById('provenance-section').style.display = 'none';
   showWarnings([]);
   showError('');
   setGenerating(false);

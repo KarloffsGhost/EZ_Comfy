@@ -8,7 +8,8 @@ import pytest
 
 from ez_comfy.planner.intent import PipelineIntent
 from ez_comfy.planner.param_resolver import ResolvedParams
-from ez_comfy.workflows.composer import compose_workflow, list_builders
+from ez_comfy.planner.provenance import ProvenanceRecord
+from ez_comfy.workflows.composer import compose_annotated_workflow, compose_workflow, list_builders
 from ez_comfy.workflows.recipes import get_recipe
 
 
@@ -217,3 +218,52 @@ def test_audio_does_not_use_checkpoint_clip():
                       and n.get("_meta", {}).get("title") == "Positive Prompt")
     clip_ref = pos_encode["inputs"]["clip"]
     assert clip_ref[0] == clip_loader_id, "Positive prompt must use CLIPLoader, not checkpoint CLIP"
+
+
+# ---------------------------------------------------------------------------
+# Annotated workflow (Note node injection)
+# ---------------------------------------------------------------------------
+
+def test_compose_annotated_workflow_injects_note():
+    plan = _make_plan("txt2img_basic")
+    plan.provenance = ProvenanceRecord(gpu_name="RTX Test", vram_available_gb=16.0)
+    nodes = compose_annotated_workflow(plan)
+    note_nodes = [n for n in nodes.values() if n.get("class_type") == "Note"]
+    assert len(note_nodes) == 1
+
+
+def test_note_node_class_type():
+    plan = _make_plan("txt2img_basic")
+    plan.provenance = ProvenanceRecord()
+    nodes = compose_annotated_workflow(plan)
+    note = next(n for n in nodes.values() if n.get("class_type") == "Note")
+    assert note["class_type"] == "Note"
+
+
+def test_note_node_id_no_collision():
+    plan = _make_plan("txt2img_basic")
+    plan.provenance = ProvenanceRecord()
+    plain_nodes = compose_workflow(plan)
+    annotated_nodes = compose_annotated_workflow(plan)
+    # Note node should be one more than the max existing id
+    max_plain_id = max(int(k) for k in plain_nodes if k.isdigit())
+    assert str(max_plain_id + 1) in annotated_nodes
+    # And the note should be new — plain nodes count + 1
+    assert len(annotated_nodes) == len(plain_nodes) + 1
+
+
+def test_note_node_contains_provenance_text():
+    plan = _make_plan("txt2img_basic")
+    plan.provenance = ProvenanceRecord(gpu_name="RTX Provenance Test", vram_available_gb=8.0)
+    nodes = compose_annotated_workflow(plan)
+    note = next(n for n in nodes.values() if n.get("class_type") == "Note")
+    assert "EZ Comfy Provenance" in note["inputs"]["text"]
+    assert "RTX Provenance Test" in note["inputs"]["text"]
+
+
+def test_note_node_has_meta_title():
+    plan = _make_plan("txt2img_basic")
+    plan.provenance = ProvenanceRecord()
+    nodes = compose_annotated_workflow(plan)
+    note = next(n for n in nodes.values() if n.get("class_type") == "Note")
+    assert note.get("_meta", {}).get("title") == "EZ Comfy Provenance"

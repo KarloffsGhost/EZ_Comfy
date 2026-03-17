@@ -11,6 +11,7 @@ class ComfyUIConfig(BaseModel):
     base_url: str = "http://127.0.0.1:8188"
     model_base_path: str = ""
     default_output_dir: str = "output"
+    output_dir: str = "output"   # ComfyUI output directory (for sidecar metadata)
     timeout_seconds: int = 300
 
 

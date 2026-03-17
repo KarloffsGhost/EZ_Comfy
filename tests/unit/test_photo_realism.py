@@ -19,7 +19,7 @@ def _class_types(*extra: str) -> set[str]:
 
 
 def test_photo_realism_selected_for_portrait_prompt():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="close-up portrait of a woman, natural lighting",
         has_reference_image=False,
@@ -30,7 +30,7 @@ def test_photo_realism_selected_for_portrait_prompt():
 
 
 def test_photo_realism_selected_for_photorealistic_prompt():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="photorealistic landscape, 35mm photography",
         has_reference_image=False,
@@ -41,7 +41,7 @@ def test_photo_realism_selected_for_photorealistic_prompt():
 
 
 def test_photo_realism_selected_for_cinematic_prompt():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="cinematic shot of a forest at dusk",
         has_reference_image=False,
@@ -52,7 +52,7 @@ def test_photo_realism_selected_for_cinematic_prompt():
 
 
 def test_hires_fix_selected_for_detail_prompt_without_photo_keywords():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="detailed fantasy dragon, ultra sharp",
         has_reference_image=False,
@@ -63,7 +63,7 @@ def test_hires_fix_selected_for_detail_prompt_without_photo_keywords():
 
 
 def test_non_photo_prompt_does_not_select_photo_realism():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="a red apple on a table",
         has_reference_image=False,
@@ -74,7 +74,7 @@ def test_non_photo_prompt_does_not_select_photo_realism():
 
 
 def test_photo_realism_selectable_by_override():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="a cat",
         has_reference_image=False,
