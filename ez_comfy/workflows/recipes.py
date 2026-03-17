@@ -199,8 +199,14 @@ def select_recipe(
     has_mask: bool,
     discovered_class_types: set[str],
     recipe_override: str | None = None,
-) -> Recipe:
-    """Select the best recipe for the given intent and context."""
+) -> tuple[Recipe, list[tuple[Recipe, str]]]:
+    """Select the best recipe for the given intent and context.
+
+    Returns (selected_recipe, rejected_recipes) where rejected_recipes is a
+    list of (recipe, reason) tuples for every candidate that was filtered out.
+    """
+    rejected: list[tuple[Recipe, str]] = []
+
     if recipe_override:
         recipe = _RECIPE_BY_ID.get(recipe_override)
         if not recipe:
@@ -218,22 +224,39 @@ def select_recipe(
                 f"{missing}. Generation may fail.",
                 stacklevel=2,
             )
-        return recipe
+        return recipe, rejected
 
     # Filter: intent match
     candidates = [r for r in RECIPES if r.intent == intent]
 
     # Filter: reference image + mask requirements
     if not has_reference_image:
+        for r in candidates[:]:
+            if r.requires_reference_image:
+                rejected.append((r, "requires a reference image (none provided)"))
         candidates = [r for r in candidates if not r.requires_reference_image]
     if not has_mask:
+        for r in candidates[:]:
+            if r.requires_mask:
+                rejected.append((r, "requires a mask image (none provided)"))
         candidates = [r for r in candidates if not r.requires_mask]
 
     # Filter: capability availability
     def caps_available(recipe: Recipe) -> bool:
         return all(has_capability(cap, discovered_class_types) for cap in recipe.required_capabilities)
 
-    available = [r for r in candidates if caps_available(r)]
+    capability_filtered: list[Recipe] = []
+    available: list[Recipe] = []
+    for r in candidates:
+        if caps_available(r):
+            available.append(r)
+        else:
+            missing_caps = [
+                cap for cap in r.required_capabilities
+                if not has_capability(cap, discovered_class_types)
+            ]
+            capability_filtered.append(r)
+            rejected.append((r, f"requires capabilities not installed: {', '.join(missing_caps)}"))
 
     # Fallback to recipes with no required capabilities if nothing else qualifies
     if not available:
@@ -243,7 +266,7 @@ def select_recipe(
         # txt2img is the only intent with a capability-free fallback.
         # Other intents cannot meaningfully substitute — raise a clear error.
         if intent.value == "txt2img":
-            return _RECIPE_BY_ID["txt2img_basic"]
+            return _RECIPE_BY_ID["txt2img_basic"], rejected
         raise RuntimeError(
             f"No recipe available for intent={intent.value!r}. "
             "Required capabilities may be missing from your ComfyUI installation. "
@@ -261,18 +284,28 @@ def select_recipe(
     if any(kw in prompt_lower for kw in _photo_keywords):
         for r in available:
             if r.id == "photo_realism_v1":
-                return r
+                # Mark lower-priority recipes as rejected
+                for other in available:
+                    if other.id != r.id:
+                        rejected.append((other, f"lower priority than {r.id} for photorealism prompt"))
+                return r, rejected
 
     # Hires fix: boost priority if prompt suggests high quality/detail
     hires_keywords = {"detail", "detailed", "hires", "high res", "4k", "8k", "ultra", "sharp", "crisp"}
     if any(kw in prompt_lower for kw in hires_keywords):
         for r in available:
             if r.id == "txt2img_hires_fix":
-                return r
+                for other in available:
+                    if other.id != r.id:
+                        rejected.append((other, f"lower priority than {r.id} for high-detail prompt"))
+                return r, rejected
 
     # Pick highest priority
     available.sort(key=lambda r: r.priority, reverse=True)
-    return available[0]
+    winner = available[0]
+    for other in available[1:]:
+        rejected.append((other, f"lower priority ({other.priority}) than {winner.id} ({winner.priority})"))
+    return winner, rejected
 
 
 def get_recipe(recipe_id: str) -> Recipe:

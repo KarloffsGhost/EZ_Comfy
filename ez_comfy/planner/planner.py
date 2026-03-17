@@ -12,6 +12,7 @@ from ez_comfy.models.profiles import ModelProfile, PromptSyntax, get_profile, sn
 from ez_comfy.planner.intent import PipelineIntent, detect_intent
 from ez_comfy.planner.param_resolver import ResolvedParams, resolve_params
 from ez_comfy.planner.prompt_adapter import StylePreset, adapt_prompt, get_style_preset
+from ez_comfy.planner.provenance import Alternative, Decision, ProvenanceRecord
 from ez_comfy.workflows.recipes import Recipe, select_recipe
 
 
@@ -69,6 +70,7 @@ class GenerationPlan:
     recommendations: list[ModelRecommendation]
     missing_capabilities: list[str]
     param_sources: dict[str, str]
+    provenance: ProvenanceRecord = field(default_factory=ProvenanceRecord)
 
     def summary(self) -> dict:
         return {
@@ -88,6 +90,7 @@ class GenerationPlan:
             "warnings": self.warnings,
             "missing_capabilities": self.missing_capabilities,
             "param_sources": self.param_sources,
+            "provenance": self.provenance.to_dict(),
         }
 
 
@@ -100,6 +103,7 @@ def plan_generation(
 ) -> GenerationPlan:
     """Main planner: turns a GenerationRequest into a fully-resolved GenerationPlan."""
     warnings: list[str] = []
+    provenance = ProvenanceRecord()
 
     # 1. Detect intent
     intent_str = request.intent_override or detect_intent(
@@ -108,6 +112,17 @@ def plan_generation(
         has_mask=request.mask_image is not None,
     ).value
     intent = PipelineIntent(intent_str)
+
+    provenance.add(Decision(
+        parameter="intent",
+        chosen_value=intent.value,
+        source="user" if request.intent_override else "prompt_keyword",
+        reason=(
+            f"User override: {request.intent_override!r}"
+            if request.intent_override
+            else "Detected from prompt keywords and input context"
+        ),
+    ))
 
     # 2. Get model recommendations
     recommendations = recommend_models(
@@ -120,9 +135,11 @@ def plan_generation(
     )
 
     # 3. Select checkpoint
-    checkpoint, catalog_entry = _select_checkpoint(
-        request, intent, recommendations, inventory, warnings
+    checkpoint, catalog_entry, checkpoint_decisions = _select_checkpoint(
+        request, intent, recommendations, inventory, warnings, hardware
     )
+    for d in checkpoint_decisions:
+        provenance.add(d)
 
     # 4. Resolve model profile
     if catalog_entry:
@@ -136,12 +153,13 @@ def plan_generation(
             family = f"{family}_{variant}" if f"{family}_{variant}" != family else family
 
     # 5. Select workflow recipe
-    recipe, missing_caps = _select_recipe(request, intent, inventory, warnings)
+    recipe, missing_caps, recipe_decision = _select_recipe(request, intent, inventory, warnings)
+    provenance.add(recipe_decision)
 
     # 6. Adapt prompt
     style_preset_obj = get_style_preset(request.style_preset)
     syntax = catalog_entry.prompt_syntax if catalog_entry else profile.prompt_syntax
-    adapted_prompt, adapted_negative = adapt_prompt(
+    adapted_prompt, adapted_negative, prompt_changes = adapt_prompt(
         user_prompt=request.prompt,
         negative_prompt=request.negative_prompt,
         syntax=syntax,
@@ -149,6 +167,14 @@ def plan_generation(
         family=family,
         auto_negative=auto_negative,
     )
+
+    if prompt_changes:
+        provenance.add(Decision(
+            parameter="prompt_adaptation",
+            chosen_value="; ".join(prompt_changes),
+            source="family_syntax",
+            reason=f"Applied {family}-specific prompt syntax: {'; '.join(prompt_changes)}",
+        ))
 
     # 7. Resolve parameters
     user_overrides = {
@@ -173,9 +199,20 @@ def plan_generation(
         aspect_ratio=request.aspect_ratio,
     )
 
+    # Emit parameter decisions
+    model_name = catalog_entry.name if catalog_entry else checkpoint
+    _emit_param_decisions(provenance, params, recipe, model_name, family)
+
     # 8. Estimate VRAM and time
     vram_est = _estimate_vram(catalog_entry, profile, params)
     time_est = _estimate_time(params, intent, hardware)
+
+    provenance.vram_available_gb = hardware.gpu_vram_gb
+    provenance.vram_estimated_gb = vram_est
+    provenance.gpu_name = hardware.gpu_name
+    provenance.model_id = catalog_entry.id if catalog_entry else checkpoint
+    provenance.model_family = family
+    provenance.recipe_id = recipe.id
 
     if vram_est > hardware.gpu_vram_gb:
         warnings.append(
@@ -211,6 +248,7 @@ def plan_generation(
         recommendations=recommendations,
         missing_capabilities=missing_caps,
         param_sources=params.sources,
+        provenance=provenance,
     )
 
 
@@ -220,8 +258,14 @@ def _select_checkpoint(
     recommendations: list[ModelRecommendation],
     inventory: ComfyUIInventory,
     warnings: list[str],
-) -> tuple[str, ModelCatalogEntry | None]:
-    """Pick the best installed checkpoint, or fall back to any available."""
+    hardware: HardwareProfile,
+) -> tuple[str, ModelCatalogEntry | None, list[Decision]]:
+    """Pick the best installed checkpoint, or fall back to any available.
+
+    Returns (checkpoint_filename, catalog_entry, decisions).
+    """
+    decisions: list[Decision] = []
+
     if request.checkpoint_override:
         override = request.checkpoint_override
         entry = find_catalog_entry(override)
@@ -230,21 +274,72 @@ def _select_checkpoint(
         if entry:
             installed = resolve_installed_filename(entry, inventory)
             if installed:
-                return installed, entry
+                decisions.append(Decision(
+                    parameter="checkpoint",
+                    chosen_value=installed,
+                    source="user",
+                    reason=f"User explicitly specified checkpoint: {override!r}",
+                ))
+                return installed, entry, decisions
 
         # If user supplied an exact installed filename, pass it through.
         for ck in inventory.checkpoints:
             if ck.filename == override:
-                return ck.filename, entry
-        return override, entry
+                decisions.append(Decision(
+                    parameter="checkpoint",
+                    chosen_value=ck.filename,
+                    source="user",
+                    reason=f"User explicitly specified checkpoint: {override!r}",
+                ))
+                return ck.filename, entry, decisions
+        decisions.append(Decision(
+            parameter="checkpoint",
+            chosen_value=override,
+            source="user",
+            reason=f"User explicitly specified checkpoint: {override!r} (not found in catalog)",
+        ))
+        return override, entry, decisions
 
-    # Try recommendations in score order — prefer installed
+    # Build alternatives list from all recommendations
+    alternatives: list[Alternative] = []
+    chosen_rec: ModelRecommendation | None = None
+
     for rec in recommendations:
         if rec.installed:
             installed = resolve_installed_filename(rec.entry, inventory)
             if installed:
-                return installed, rec.entry
-            # Inventory and installed flag may have drifted. Fall through to next candidate.
+                if chosen_rec is None:
+                    chosen_rec = rec
+                    chosen_filename = installed
+                else:
+                    alternatives.append(Alternative(
+                        value=rec.entry.name,
+                        rejected_reason=f"lower relevance score ({rec.score:.0f})",
+                    ))
+            else:
+                alternatives.append(Alternative(
+                    value=rec.entry.name,
+                    rejected_reason="not installed (filename not found in ComfyUI inventory)",
+                ))
+        else:
+            if not rec.fits_vram:
+                reason = f"requires {rec.entry.vram_min_gb}GB VRAM, only {hardware.gpu_vram_gb}GB available"
+            else:
+                reason = "not installed"
+            alternatives.append(Alternative(value=rec.entry.name, rejected_reason=reason))
+
+    if chosen_rec is not None:
+        decisions.append(Decision(
+            parameter="checkpoint",
+            chosen_value=chosen_filename,
+            source="recommendation",
+            reason=(
+                f"Top-scored installed model for {intent.value} intent "
+                f"(score: {chosen_rec.score:.0f}; reasons: {', '.join(chosen_rec.match_reasons)})"
+            ),
+            alternatives=alternatives,
+        ))
+        return chosen_filename, chosen_rec.entry, decisions
 
     # No recommended model installed — use first available checkpoint
     if inventory.checkpoints:
@@ -254,7 +349,21 @@ def _select_checkpoint(
             "Consider installing a model from the catalog."
         )
         entry = find_catalog_entry(ck.filename)
-        return ck.filename, entry
+        # All recommendations become alternatives
+        for rec in recommendations:
+            if not any(a.value == rec.entry.name for a in alternatives):
+                alternatives.append(Alternative(
+                    value=rec.entry.name,
+                    rejected_reason="not installed",
+                ))
+        decisions.append(Decision(
+            parameter="checkpoint",
+            chosen_value=ck.filename,
+            source="fallback",
+            reason="No catalog-recommended model installed; using first available checkpoint",
+            alternatives=alternatives,
+        ))
+        return ck.filename, entry, decisions
 
     raise RuntimeError(
         "No checkpoints found in ComfyUI. Please install a model first."
@@ -266,11 +375,11 @@ def _select_recipe(
     intent: PipelineIntent,
     inventory: ComfyUIInventory,
     warnings: list[str],
-) -> tuple[Recipe, list[str]]:
-    """Select recipe, tracking missing capabilities."""
+) -> tuple[Recipe, list[str], Decision]:
+    """Select recipe, tracking missing capabilities. Returns (recipe, missing_caps, decision)."""
     from ez_comfy.hardware.comfyui_inventory import has_capability
 
-    recipe = select_recipe(
+    recipe, rejected_recipes = select_recipe(
         intent=intent,
         prompt=request.prompt,
         has_reference_image=request.reference_image is not None,
@@ -290,7 +399,85 @@ def _select_recipe(
             "Generation may fail. Install the required custom nodes or choose a different recipe."
         )
 
-    return recipe, missing
+    # Determine source of recipe selection
+    if request.recipe_override:
+        source = "user"
+        reason = f"User explicitly specified recipe: {request.recipe_override!r}"
+    elif rejected_recipes and any(
+        "capability" in reason.lower() for _, reason in rejected_recipes
+    ):
+        source = "capability_fallback"
+        reason = f"Selected as best available recipe given installed ComfyUI capabilities"
+    elif rejected_recipes and any(
+        "photorealism" in reason.lower() or "prompt_keyword" in reason.lower()
+        or "lower priority" in reason.lower()
+        for _, reason in rejected_recipes
+    ):
+        source = "prompt_keyword"
+        reason = f"Selected based on prompt keyword matching"
+    else:
+        source = "default"
+        reason = f"Highest-priority recipe for {intent.value} intent"
+
+    alternatives = [
+        Alternative(value=r.id, rejected_reason=rej_reason)
+        for r, rej_reason in rejected_recipes
+    ]
+
+    decision = Decision(
+        parameter="recipe",
+        chosen_value=recipe.id,
+        source=source,
+        reason=reason,
+        alternatives=alternatives,
+    )
+
+    return recipe, missing, decision
+
+
+def _emit_param_decisions(
+    provenance: ProvenanceRecord,
+    params: ResolvedParams,
+    recipe: Recipe,
+    model_name: str,
+    family: str,
+) -> None:
+    """Add parameter decisions to the provenance record."""
+    source_labels = {
+        "user": lambda param, val: f"User explicitly set {param}={val}",
+        "recipe": lambda param, val: f"Recipe '{recipe.id}' overrides {param} to {val}",
+        "model_catalog": lambda param, val: f"Model catalog entry for {model_name!r} specifies {param}={val}",
+        "family_profile": lambda param, val: f"Default for {family} family",
+        "random": lambda param, val: "Random seed (no user seed specified)",
+        "resolution_bucket": lambda param, val: f"Snapped to nearest {family} resolution bucket",
+    }
+
+    def _emit(param_key: str, display_key: str, value):
+        source = params.sources.get(param_key, "family_profile")
+        label_fn = source_labels.get(source, lambda p, v: f"Source: {source}")
+        provenance.add(Decision(
+            parameter=display_key,
+            chosen_value=value,
+            source=source,
+            reason=label_fn(display_key, value),
+        ))
+
+    _emit("steps", "steps", params.steps)
+    _emit("cfg", "cfg", params.cfg_scale)
+    _emit("sampler", "sampler", params.sampler)
+    _emit("scheduler", "scheduler", params.scheduler)
+
+    # Resolution as a single combined decision
+    res_source = params.sources.get("width", "family_profile")
+    res_label_fn = source_labels.get(res_source, lambda p, v: f"Source: {res_source}")
+    provenance.add(Decision(
+        parameter="resolution",
+        chosen_value=f"{params.width}x{params.height}",
+        source=res_source,
+        reason=res_label_fn("resolution", f"{params.width}x{params.height}"),
+    ))
+
+    _emit("seed", "seed", params.seed)
 
 
 def _estimate_vram(

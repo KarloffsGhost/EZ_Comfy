@@ -14,7 +14,7 @@ def test_all_recipes_have_builders():
 
 
 def test_select_txt2img_basic():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="a cat",
         has_reference_image=False,
@@ -26,7 +26,7 @@ def test_select_txt2img_basic():
 
 
 def test_select_hires_fix_on_detail_prompt():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="ultra detailed 4k fantasy dragon, crisp, sharp",
         has_reference_image=False,
@@ -37,7 +37,7 @@ def test_select_hires_fix_on_detail_prompt():
 
 
 def test_select_img2img_basic_without_controlnet():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.IMG2IMG,
         prompt="change the style",
         has_reference_image=True,
@@ -48,7 +48,7 @@ def test_select_img2img_basic_without_controlnet():
 
 
 def test_select_controlnet_when_available():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.IMG2IMG,
         prompt="keep the structure",
         has_reference_image=True,
@@ -59,7 +59,7 @@ def test_select_controlnet_when_available():
 
 
 def test_select_inpaint():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.INPAINT,
         prompt="remove the background",
         has_reference_image=True,
@@ -82,7 +82,7 @@ def test_select_upscale_raises_without_capabilities():
 
 
 def test_select_upscale_succeeds_with_capability():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.UPSCALE,
         prompt="upscale this",
         has_reference_image=True,
@@ -93,7 +93,7 @@ def test_select_upscale_succeeds_with_capability():
 
 
 def test_recipe_override():
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="anything",
         has_reference_image=False,
@@ -129,3 +129,57 @@ def test_get_recipe_not_found():
 def test_list_recipes_returns_all():
     recipes = list_recipes()
     assert len(recipes) == len(RECIPES)
+
+
+# ---------------------------------------------------------------------------
+# Rejected list
+# ---------------------------------------------------------------------------
+
+def test_rejected_includes_capability_filtered():
+    recipe, rejected = select_recipe(
+        intent=PipelineIntent.IMG2IMG,
+        prompt="change the style",
+        has_reference_image=True,
+        has_mask=False,
+        discovered_class_types=set(),  # no ControlNet
+    )
+    assert recipe.id == "img2img_basic"
+    rejected_ids = [r.id for r, _ in rejected]
+    assert "img2img_controlnet_canny" in rejected_ids
+
+
+def test_rejected_reason_mentions_capability():
+    recipe, rejected = select_recipe(
+        intent=PipelineIntent.IMG2IMG,
+        prompt="keep structure",
+        has_reference_image=True,
+        has_mask=False,
+        discovered_class_types=set(),
+    )
+    controlnet_rejections = [(r, reason) for r, reason in rejected if r.id == "img2img_controlnet_canny"]
+    assert controlnet_rejections
+    assert "controlnet" in controlnet_rejections[0][1].lower()
+
+
+def test_rejected_empty_for_user_override():
+    recipe, rejected = select_recipe(
+        intent=PipelineIntent.TXT2IMG,
+        prompt="anything",
+        has_reference_image=False,
+        has_mask=False,
+        discovered_class_types=set(),
+        recipe_override="txt2img_hires_fix",
+    )
+    assert recipe.id == "txt2img_hires_fix"
+    assert rejected == []
+
+
+def test_rejected_includes_lower_priority():
+    recipe, rejected = select_recipe(
+        intent=PipelineIntent.TXT2IMG,
+        prompt="a simple cat",  # no photorealism/detail keywords
+        has_reference_image=False,
+        has_mask=False,
+        discovered_class_types=set(),
+    )
+    assert len(rejected) > 0
