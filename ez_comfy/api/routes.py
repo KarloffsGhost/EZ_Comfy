@@ -189,6 +189,7 @@ async def plan(request: Request, body: PlanRequest) -> PlanResponse:
             }
             for r in plan.recommendations
         ],
+        provenance=plan.provenance.to_dict(),
     )
 
 
