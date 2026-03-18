@@ -102,6 +102,7 @@ class PlanResponse(BaseModel):
     prompt: str
     negative_prompt: str
     recommendations: list[dict]
+    provenance: dict | None = None
 
 
 class JobStatusResponse(BaseModel):

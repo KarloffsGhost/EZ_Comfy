@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-135%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-182%20passing-brightgreen.svg)](tests/)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-API-orange.svg)](https://github.com/comfyanonymous/ComfyUI)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 
@@ -13,7 +13,7 @@ EZ Comfy is a hardware-aware orchestration layer for [ComfyUI](https://github.co
 No node graphs. No hunting through documentation. No VRAM surprises.
 
 ![EZ Comfy Web UI](assets/screenshot-ui.png)
-<!-- Screenshot: open http://127.0.0.1:8088, type a prompt, generate, capture the result. Save as assets/screenshot-ui.png -->
+<!-- Screenshot: open http://127.0.0.1:7860, type a prompt, generate, capture the result. Save as assets/screenshot-ui.png -->
 
 ---
 
@@ -26,7 +26,7 @@ ComfyUI is the most capable local image generation tool available. Its node-base
 - **What settings?** SDXL Lightning wants 6 steps and CFG 1.5. Flux dev wants 20 steps and CFG 1.0. Wrong settings produce garbage outputs.
 - **Why am I running out of VRAM?** Your local LLM is still loaded in GPU memory from your last chat session.
 
-EZ Comfy solves all of this automatically.
+EZ Comfy solves all of this automatically — and tells you exactly what it decided and why.
 
 ---
 
@@ -84,8 +84,49 @@ Before every generation, EZ Comfy tells Ollama to evict its model from VRAM, run
 └───────────────────────────────────────────────────────────┘
 ```
 
-### 6. Exports workflows to ComfyUI
-Every planned generation can be downloaded as a ComfyUI-compatible API workflow JSON. A "Download Workflow" button in the web UI lets you grab the generated node graph and drag it into ComfyUI's canvas — great for using EZ Comfy to find the right setup, then hand-tuning it in the full interface.
+### 6. Exports workflows to ComfyUI — with full provenance
+Every planned generation can be downloaded as a ComfyUI-compatible API workflow JSON. A **Download Workflow** button in the web UI lets you grab the generated node graph and drag it into ComfyUI's canvas — great for using EZ Comfy to find the right setup, then hand-tuning it in the full interface.
+
+When you export, EZ Comfy injects a **Note node** directly into the workflow that documents every automated decision:
+
+```
+EZ Comfy Provenance
+═══════════════════════════════════════════════════════════
+GPU           NVIDIA GeForce RTX 5070 Ti  (15.9 GB VRAM)
+Model         realvisxlV50_v50LightningBakedvae.safetensors
+Family        sdxl_lightning
+Recipe        photo_realism_v1
+═══════════════════════════════════════════════════════════
+DECISIONS
+intent         txt2img        (recommendation)
+               Why: detected keyword 'portrait' → txt2img
+checkpoint     realvisxlV50…  (recommendation, score 99.8)
+               Why: best installed match for photorealism, portraits; VRAM fits
+recipe         photo_realism… (recommendation)
+               Why: best match for photorealism intent
+steps          6              (model_catalog)
+               Why: catalog default for sdxl_lightning
+cfg            1.5            (model_catalog)
+               Why: catalog default for sdxl_lightning
+sampler        euler          (model_catalog)
+resolution     1024×1024      (family_profile)
+seed           1678564476     (random)
+═══════════════════════════════════════════════════════════
+Alternatives considered:
+  checkpoint: DreamShaper 8 (score 75.0) — lower score than winner
+  checkpoint: SDXL Base 1.0 (score 70.8) — lower score than winner
+```
+
+This note travels with the workflow — when you open it in ComfyUI, you can see exactly what EZ Comfy decided and why, making the handoff to power-user mode fully transparent.
+
+### 7. Provenance panel in the web UI
+After every Plan or Generate, the web UI shows a **What EZ Comfy decided for you** panel with:
+- The chosen model, recipe, and intent
+- Every parameter decision and its source (`user` / `recommendation` / `model_catalog` / `family_profile` / `random` / etc.)
+- Alternatives that were considered and rejected, with reasons
+
+### 8. Sidecar metadata files
+After each generation, EZ Comfy writes a JSON sidecar to `{output_dir}/ez_comfy_meta/{prompt_id}.json` containing the full provenance record, GPU context, timing, and output file list. Retrieve it later via `GET /v1/history/{prompt_id}/provenance`.
 
 ---
 
@@ -100,7 +141,7 @@ Every planned generation can be downloaded as a ComfyUI-compatible API workflow 
 ### Install
 
 ```bash
-git clone https://github.com/yourusername/ez-comfy
+git clone https://github.com/KarloffsGhost/ez-comfy
 cd ez-comfy
 pip install -e ".[dev]"
 ```
@@ -144,8 +185,8 @@ python -m ez_comfy generate "a cyberpunk city at sunset, cinematic lighting"
 ### Use the web UI
 
 ```bash
-python -m ez_comfy serve --port 8088
-# Open http://127.0.0.1:8088
+python -m ez_comfy serve --port 7860
+# Open http://127.0.0.1:7860
 ```
 
 
@@ -172,6 +213,7 @@ Copy `config/settings.example.yaml` to `config/settings.yaml`:
 comfyui:
   base_url: "http://127.0.0.1:8188"      # Your ComfyUI URL
   model_base_path: "/path/to/ComfyUI/models"
+  output_dir: "output"                    # ComfyUI output directory (for sidecar metadata)
 
 ollama:
   base_url: "http://localhost:11434"
@@ -237,14 +279,54 @@ The server exposes a REST API. Interactive docs at `http://127.0.0.1:PORT/docs`.
 | `GET` | `/v1/queue` | List all queued/running/completed jobs |
 | `GET` | `/v1/queue/{job_id}` | Get job status and result |
 | `DELETE` | `/v1/queue/{job_id}` | Cancel a queued job |
-| `POST` | `/v1/plan` | Preview generation plan (no GPU) |
-| `POST` | `/v1/plan/workflow` | Export ComfyUI workflow JSON (downloadable) |
+| `POST` | `/v1/plan` | Preview generation plan with full provenance (no GPU) |
+| `POST` | `/v1/plan/workflow` | Export ComfyUI workflow JSON (with embedded provenance Note node) |
+| `GET` | `/v1/history/{prompt_id}/provenance` | Retrieve provenance record for a completed generation |
 | `POST` | `/v1/compare` | Run multiple generations for A/B comparison |
 | `GET` | `/v1/recommendations` | Ranked model recommendations for a prompt |
 | `GET` | `/v1/inventory` | Installed models, LoRAs, capabilities |
 | `POST` | `/v1/inventory/refresh` | Re-scan ComfyUI inventory |
 | `GET` | `/v1/recipes` | Available workflow recipes |
 | `GET` | `/v1/install/plan` | What to install for a given prompt |
+
+### Workflow export provenance levels
+
+`POST /v1/plan/workflow?provenance=<level>`
+
+| Level | Behaviour |
+|-------|-----------|
+| `summary` *(default)* | Injects a ComfyUI Note node with human-readable provenance. The note travels with the workflow onto the canvas. |
+| `full` | Note node + `_ez_comfy_provenance` JSON key in the workflow dict. |
+| `none` | Raw workflow with no additions — identical to what EZ Comfy submits to ComfyUI. |
+
+---
+
+## Provenance — How It Works
+
+Every automated decision EZ Comfy makes is recorded as a `Decision` with four fields:
+
+| Field | Description |
+|-------|-------------|
+| `parameter` | What was decided (e.g. `checkpoint`, `steps`, `resolution`) |
+| `chosen_value` | The value that was selected |
+| `source` | Why this source had authority (see table below) |
+| `reason` | Human-readable explanation |
+| `alternatives` | Other values considered and why they were rejected |
+
+**Decision sources** (priority order, highest first):
+
+| Source | Meaning |
+|--------|---------|
+| `user` | Explicit user override via API/CLI |
+| `recommendation` | Best-scoring catalog match for this GPU + intent |
+| `capability_fallback` | Downgraded because a required node type isn't installed |
+| `prompt_keyword` | Detected from keywords in the prompt |
+| `model_catalog` | Catalog-defined default for this checkpoint |
+| `family_profile` | Model-family default (e.g. SDXL default resolution) |
+| `recipe` | Workflow recipe default |
+| `resolution_bucket` | Nearest trained aspect-ratio bucket |
+| `fallback` | System default when no better source applies |
+| `random` | Randomly generated (seed) |
 
 ---
 
@@ -256,10 +338,11 @@ ez_comfy/
   hardware/         GPU probe (nvidia-smi) + ComfyUI inventory scanner
   models/           Curated model catalog (~50 entries) + family profiles + classifier
   planner/          Intent detection + prompt adapter + param resolver + plan generator
+    provenance.py   ProvenanceRecord, Decision, Alternative dataclasses
   workflows/        Recipe registry + ComfyUI node graph composers (Python dicts)
   comfyui/          HTTP + WebSocket client + VRAM guard context manager
   config/           Pydantic settings schema + YAML loader + env overrides
-  engine.py         Top-level orchestrator + GPU-locked generation queue
+  engine.py         Top-level orchestrator + GPU-locked generation queue + sidecar writer
   __main__.py       argparse CLI entry point
 ```
 
@@ -269,31 +352,34 @@ ez_comfy/
 User prompt
     │
     ▼ Intent detection        txt2img? img2img? upscale? audio?
-    │
+    │                         → Decision(parameter="intent", source="recommendation"|"prompt_keyword")
     ▼ Model selection         catalog × inventory × VRAM × task scoring
-    │
+    │                         → Decision(parameter="checkpoint", alternatives=[...rejected...])
     ▼ Recipe selection        workflow template × capability check
-    │
+    │                         → Decision(parameter="recipe", alternatives=[...rejected...])
     ▼ Prompt adaptation       Pony tags / Flux no-emphasis / auto-negatives
-    │
+    │                         → Decision(parameter="prompt_adaptation")
     ▼ Parameter resolution    profile → catalog → recipe → user overrides
-    │
+    │                         → Decision per param with source tag
     ▼ Workflow composition    Python dict → ComfyUI node graph
     │
     ▼ VRAM handoff            unload Ollama → acquire GPU lock
     │
     ▼ Submit to ComfyUI       POST /prompt + WebSocket progress events
     │
-    ▼ Result                  image/audio/video + plan summary + warnings
+    ▼ Result                  image/audio/video + provenance record + sidecar JSON
 ```
 
 ### Key design decisions (for developers)
 
 - **Workflows are Python dicts, not JSON files.** No template I/O at generation time. Node graphs are composed in memory by builder functions.
+- **Provenance is structural, not reconstructed.** `ProvenanceRecord` is built incrementally during `plan_generation()` — each decision is recorded at the moment it's made, not inferred after the fact.
+- **Note node injection uses ComfyUI's built-in `Note` class_type.** No custom nodes required. The note appears on the canvas when you drag the exported workflow in.
 - **Capability-based recipe selection.** Recipes declare required ComfyUI `class_type` names (e.g. `"ControlNetLoader"`). The inventory checks `GET /object_info` at startup to discover what's installed. If a capability is missing, a simpler recipe is chosen and the user is warned.
 - **Single GPU lock.** `asyncio.Lock` in `GenerationEngine` ensures no concurrent submissions, regardless of whether the request came from the API, CLI, or the background queue.
 - **WebSocket-primary, HTTP polling fallback.** Progress events come from `ws://comfyui/ws`. If the WebSocket fails for any reason, silent fallback to `GET /history` polling.
 - **VRAM guard is a context manager.** `async with vram_guard(client, ollama_url)` wraps every generation. The `finally` block always frees ComfyUI VRAM even if generation fails.
+- **Sidecar writes are best-effort.** Wrapped in `try/except` so a metadata write failure never aborts a generation.
 - **No model downloads.** EZ Comfy shows download instructions (HuggingFace CLI commands, Civitai links) but never downloads files itself.
 
 ---
@@ -326,7 +412,7 @@ ModelCatalogEntry(
 pytest tests/unit/ -v
 ```
 
-All 135 tests run in under 1 second with no ComfyUI connection required.
+All 182 tests run in under 1 second with no ComfyUI connection required.
 
 ---
 
