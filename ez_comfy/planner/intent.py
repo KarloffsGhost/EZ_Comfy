@@ -17,8 +17,14 @@ _VIDEO_KEYWORDS = {
     "gif", "film clip", "film footage", "cinematic video", "moving image",
     "make it move", "bring to life",
 }
+# Compound words that contain a _VIDEO_KEYWORDS token but are not video-generation requests
+_NOT_VIDEO_PHRASES = {"video game", "video games", "game video"}
+
 _AUDIO_KEYWORDS = {
-    "sound", "audio", "music", "song", "melody", "beat", "sfx",
+    # "sound" alone is too generic (appears in image descriptions like "sound of waves")
+    # Use compound forms instead
+    "sound effect", "sound effects", "sound design", "sound generation",
+    "audio", "music", "song", "melody", "beat", "sfx",
     "noise", "ambient sound", "soundtrack",
 }
 _UPSCALE_KEYWORDS = {
@@ -65,8 +71,8 @@ def detect_intent(
     if _matches(lower, _AUDIO_KEYWORDS):
         return PipelineIntent.AUDIO
 
-    # Video signals
-    if _matches(lower, _VIDEO_KEYWORDS):
+    # Video signals — exclude compound phrases like "video game"
+    if _matches(lower, _VIDEO_KEYWORDS) and not any(p in lower for p in _NOT_VIDEO_PHRASES):
         return PipelineIntent.VIDEO
 
     # Upscale signals (with or without image)
@@ -75,9 +81,10 @@ def detect_intent(
 
     # Image-conditional intents
     if has_reference_image:
-        if has_mask or _matches(lower, _INPAINT_KEYWORDS):
+        # Inpaint requires an explicit mask; keywords alone without a mask are img2img
+        if has_mask:
             return PipelineIntent.INPAINT
-        if _matches(lower, _IMG2IMG_KEYWORDS):
+        if _matches(lower, _IMG2IMG_KEYWORDS) or _matches(lower, _INPAINT_KEYWORDS):
             return PipelineIntent.IMG2IMG
         # Default when image provided: img2img
         return PipelineIntent.IMG2IMG

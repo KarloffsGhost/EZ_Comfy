@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-182%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-232%20passing-brightgreen.svg)](tests/)
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-API-orange.svg)](https://github.com/comfyanonymous/ComfyUI)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 
@@ -150,8 +150,13 @@ pip install -e ".[dev]"
 
 ```bash
 cp config/settings.example.yaml config/settings.yaml
-# Edit config/settings.yaml — set your ComfyUI URL and model path
+# Optional: edit config/settings.yaml only if auto-detect cannot find ComfyUI
 ```
+
+By default, EZ Comfy auto-detects a local ComfyUI install. It probes common
+localhost ports (`8188`, `8000`, `8189`, `8001`) and reads the ComfyUI Desktop
+model-path config when available. Manual `base_url` and `model_base_path`
+settings still take priority when you set them.
 
 ### Check your setup
 
@@ -161,7 +166,7 @@ python -m ez_comfy check
 
 Output:
 ```
-Checking ComfyUI at http://127.0.0.1:8188 …
+Detected ComfyUI at http://127.0.0.1:8188 (source: probe)
 GPU     : NVIDIA GeForce RTX 4070  (12.0 GB VRAM)
 RAM     : 32.0 GB
 Platform: win32
@@ -207,12 +212,15 @@ python -m ez_comfy recommend "photorealistic portrait"
 
 ## Configuration
 
-Copy `config/settings.example.yaml` to `config/settings.yaml`:
+Copy `config/settings.example.yaml` to `config/settings.yaml` if you want local
+overrides. The defaults auto-detect ComfyUI, so a config file is optional for
+standard local installs:
 
 ```yaml
 comfyui:
-  base_url: "http://127.0.0.1:8188"      # Your ComfyUI URL
-  model_base_path: "/path/to/ComfyUI/models"
+  auto_detect: true
+  # base_url: "http://127.0.0.1:8188"      # Optional manual override
+  # model_base_path: "/path/to/ComfyUI/models"
   output_dir: "output"                    # ComfyUI output directory (for sidecar metadata)
 
 ollama:
@@ -412,7 +420,7 @@ ModelCatalogEntry(
 pytest tests/unit/ -v
 ```
 
-All 182 tests run in under 1 second with no ComfyUI connection required.
+All 232 tests run in under 1 second with no ComfyUI connection required.
 
 ---
 
