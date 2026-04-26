@@ -6,37 +6,72 @@
 [![ComfyUI](https://img.shields.io/badge/ComfyUI-API-orange.svg)](https://github.com/comfyanonymous/ComfyUI)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 
-> **ComfyUI is incredibly powerful — and incredibly complex.** EZ Comfy sits in front of it so you don't have to.
+> **Prompt in. ComfyUI workflow out.**
 
-EZ Comfy is a hardware-aware orchestration layer for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). You type a prompt. It figures out the rest: which model fits your GPU, which workflow to use, what parameters to apply, and how to adapt your prompt for the model you're running.
+EZ Comfy is a hardware-aware command center for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). You describe what you want; it picks the right installed model, builds the workflow, adapts the prompt syntax, protects VRAM, and records every decision so you can inspect or export the result.
 
-No node graphs. No hunting through documentation. No VRAM surprises.
+No node graph wrangling. No guessing checkpoint settings. No hidden "why did it choose that?" behavior.
 
 ![EZ Comfy Web UI](assets/screenshot-ui.png)
 <!-- Screenshot: open http://127.0.0.1:7860, type a prompt, generate, capture the result. Save as assets/screenshot-ui.png -->
 
----
-
-## The Problem
-
-ComfyUI is the most capable local image generation tool available. Its node-based workflow system gives you complete control over every step of the diffusion pipeline. But that power comes at a cost:
-
-- **Which model should I use?** There are hundreds of checkpoints, each optimized for different tasks, trained on different datasets, requiring different prompt syntax, and demanding different amounts of VRAM.
-- **How do I wire the workflow?** A basic txt2img needs ~8 nodes. A hi-res fix pipeline needs ~20. Inpainting adds more. ControlNet more still.
-- **What settings?** SDXL Lightning wants 6 steps and CFG 1.5. Flux dev wants 20 steps and CFG 1.0. Wrong settings produce garbage outputs.
-- **Why am I running out of VRAM?** Your local LLM is still loaded in GPU memory from your last chat session.
-
-EZ Comfy solves all of this automatically — and tells you exactly what it decided and why.
+Plan, generate, compare, and export ComfyUI-ready workflows from one local web UI.
 
 ---
 
-## What EZ Comfy Does
+## See It Work
 
-### 1. Selects the best model for your GPU
-EZ Comfy maintains a curated catalog of ~50 popular checkpoints, each tagged with VRAM requirements, ideal tasks, strengths, and weaknesses. At startup it scans your ComfyUI installation and your GPU. When you generate, it picks the best installed model for your intent — or tells you exactly what to download if nothing fits.
+```bash
+python -m ez_comfy check
+python -m ez_comfy plan "cinematic portrait of an astronaut"
+python -m ez_comfy generate "cinematic portrait of an astronaut"
+```
 
-### 2. Detects intent and selects the right workflow
-It classifies your prompt and inputs into a pipeline intent:
+Example plan output:
+
+```text
+Intent      txt2img
+Model       realvisxlV50_v50LightningBakedvae.safetensors
+Recipe      photo_realism_v1
+Resolution  1024x1024
+Steps       6
+CFG         1.5
+
+Why: best installed photorealistic SDXL model that fits your GPU.
+```
+
+## Why It Matters
+
+| Without EZ Comfy | With EZ Comfy |
+|---|---|
+| Pick checkpoints by memory and forum notes | Ranks installed models against your prompt, intent, and VRAM |
+| Hand-build or copy node graphs | Composes the ComfyUI workflow automatically |
+| Guess sampler, steps, CFG, resolution, negatives | Applies model-family defaults and trained resolution buckets |
+| Wonder why a result changed | Shows a provenance trail for every automated decision |
+| Fight Ollama and ComfyUI for GPU memory | Evicts Ollama before generation and frees ComfyUI afterward |
+| Rebuild work manually in ComfyUI | Exports workflow JSON with an embedded provenance note |
+
+## Current Status
+
+- 232 tests passing.
+- Local ComfyUI Desktop and standalone server auto-detection.
+- Curated model catalog with SDXL, SD 1.5, Pony/NoobAI, Flux, video, audio, inpaint, and upscaler entries.
+- CLI, REST API, and local web UI.
+- Workflow export with embedded ComfyUI `Note` provenance.
+- GPU-locked generation queue with Ollama VRAM handoff.
+
+## What You Stop Worrying About
+
+| Area | What EZ Comfy does |
+|---|---|
+| Model choice | Maintains a curated catalog of ~50 popular checkpoints with VRAM requirements, strengths, weaknesses, download hints, and model-family behavior. |
+| Intent routing | Classifies prompts and inputs into `txt2img`, `img2img`, `inpaint`, `upscale`, `video`, or `audio`, then selects a matching workflow recipe. |
+| Prompt syntax | Adds Pony score tags, strips Flux emphasis weights, applies SDXL negatives, and handles SD 1.5 anime quality suffixes automatically. |
+| Resolution | Snaps arbitrary sizes to trained buckets such as `1024x1024`, `1152x896`, `896x1152`, `768x1344`, `512x768`, and related family-specific ratios. |
+| VRAM | Unloads idle Ollama models before generation, serializes GPU jobs, and asks ComfyUI to free memory after completion. |
+| Provenance | Records the chosen model, recipe, intent, resolution, sampler, seed, alternatives, and reasons in the UI, sidecar metadata, and exported workflows. |
+
+## Intent Routing
 
 | Intent | Triggered by |
 |--------|-------------|
@@ -47,10 +82,9 @@ It classifies your prompt and inputs into a pipeline intent:
 | `video` | Animate/video prompt or reference image |
 | `audio` | Sound/music/audio prompt |
 
-Then selects from a library of proven workflow recipes (txt2img basic, hi-res fix, photo realism, img2img, ControlNet canny, inpaint, upscale+refine, SVD, Stable Audio) and composes the ComfyUI node graph automatically.
+EZ Comfy selects from workflow recipes such as txt2img basic, hi-res fix, photo realism, img2img, ControlNet canny, inpaint, upscale+refine, SVD, and Stable Audio, then composes the ComfyUI node graph automatically.
 
-### 3. Adapts prompts for model-specific syntax
-Different model families require different prompt syntax. EZ Comfy applies the right rules automatically:
+## Model-Specific Prompt Handling
 
 | Family | What it does automatically |
 |--------|---------------------------|
@@ -59,37 +93,26 @@ Different model families require different prompt syntax. EZ Comfy applies the r
 | **SD 1.5 anime** | Appends `, masterpiece, best quality` quality suffix |
 | **SDXL** | Applies standard quality negatives automatically |
 
-Without this, using a Pony model without score tags produces mediocre results, and sending emphasis weights to Flux literally breaks the conditioning.
+## VRAM Handoff
 
-### 4. Snaps resolution to trained buckets
-Arbitrary resolutions produce blurry, distorted results because diffusion models are trained on specific aspect ratios. EZ Comfy always snaps to the nearest trained bucket:
+If you run a local LLM via [Ollama](https://ollama.com) alongside ComfyUI, both can compete for GPU memory. EZ Comfy unloads idle Ollama models before generation, runs the ComfyUI job under a single GPU lock, then frees ComfyUI memory afterward.
 
-- **SDXL / Flux:** `1024×1024`, `1152×896`, `896×1152`, `1344×768`, `768×1344`, `1536×640`, etc.
-- **SD 1.5:** `512×512`, `768×512`, `512×768`, `640×448`, `448×640`, etc.
-
-You can request `1920×1080` and it will snap to `1344×768` — the closest trained ratio.
-
-### 5. Manages VRAM automatically (the Ollama handoff)
-If you run a local LLM via [Ollama](https://ollama.com) alongside ComfyUI — common for fully-local AI setups — the two fight over GPU memory. Ollama keeps its model loaded in VRAM even when idle, which can push ComfyUI into an OOM situation mid-generation.
-
-Before every generation, EZ Comfy tells Ollama to evict its model from VRAM, runs the generation, then tells ComfyUI to free its memory on completion. Ollama reloads lazily on the next LLM request. No manual intervention, no OOM errors.
-
-```
-┌── Generation start ──────────────────────────────────────┐
-│  1. POST ollama /api/generate {keep_alive: 0}  ← evict   │
-│  2. Acquire GPU lock                                      │
-│  3. Run ComfyUI workflow                                  │
-│  4. POST comfyui /free                         ← cleanup  │
-│  5. Release GPU lock                                      │
-└───────────────────────────────────────────────────────────┘
+```text
+Generation start
+  1. POST Ollama /api/generate {"keep_alive": 0}
+  2. Acquire GPU lock
+  3. Run ComfyUI workflow
+  4. POST ComfyUI /free
+  5. Release GPU lock
 ```
 
-### 6. Exports workflows to ComfyUI — with full provenance
+## Workflow Export With Provenance
+
 Every planned generation can be downloaded as a ComfyUI-compatible API workflow JSON. A **Download Workflow** button in the web UI lets you grab the generated node graph and drag it into ComfyUI's canvas — great for using EZ Comfy to find the right setup, then hand-tuning it in the full interface.
 
-When you export, EZ Comfy injects a **Note node** directly into the workflow that documents every automated decision:
+When you export, EZ Comfy injects a `Note` node directly into the workflow that documents every automated decision:
 
-```
+```text
 EZ Comfy Provenance
 ═══════════════════════════════════════════════════════════
 GPU           NVIDIA GeForce RTX 5070 Ti  (15.9 GB VRAM)
@@ -119,13 +142,13 @@ Alternatives considered:
 
 This note travels with the workflow — when you open it in ComfyUI, you can see exactly what EZ Comfy decided and why, making the handoff to power-user mode fully transparent.
 
-### 7. Provenance panel in the web UI
+## Provenance Everywhere
+
 After every Plan or Generate, the web UI shows a **What EZ Comfy decided for you** panel with:
 - The chosen model, recipe, and intent
 - Every parameter decision and its source (`user` / `recommendation` / `model_catalog` / `family_profile` / `random` / etc.)
 - Alternatives that were considered and rejected, with reasons
 
-### 8. Sidecar metadata files
 After each generation, EZ Comfy writes a JSON sidecar to `{output_dir}/ez_comfy_meta/{prompt_id}.json` containing the full provenance record, GPU context, timing, and output file list. Retrieve it later via `GET /v1/history/{prompt_id}/provenance`.
 
 ---
