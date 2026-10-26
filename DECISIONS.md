@@ -4,7 +4,7 @@ Non-obvious choices, newest first. Each entry: date, decision, why.
 
 ## 2026-10-25 — Wan 2.2 text-to-video recipe (WI-5, part 1: planning, builder, outputs)
 
-**Run live on 2026-10-25** (RTX 5070 Ti, ComfyUI 0.42.0, through `python -m ez_comfy generate`): 512x512, 17 frames, 10 steps finished in 128 s including the cold model load and produced one MP4 (17 frames at 16 fps). VRAM peaked at about 15.6 GiB (the card was full, so the models offload to RAM), GPU 100 %, 58 C, 256 W peak. Recorded in `COMPAT.md`.
+**Run live on 2026-10-25** (16 GB card, ComfyUI 0.42.0, through `python -m ez_comfy generate`): 512x512, 17 frames, 10 steps finished in 128 s including the cold model load and produced one MP4 (17 frames at 16 fps). VRAM peaked at about 15.6 GiB (the card was full, so the models offload to RAM), GPU 100 %, 58 C, 256 W peak. Recorded in `COMPAT.md`.
 
 **Live correction.** The spec (and my first implementation) said the video marker is `animated` on each image entry. In the real history entry `animated` is a list on the *node output*, parallel to `images`, and each file carries `metadata.kind == "video"`. `extract_outputs` was labelling the MP4 an image until the live check. It now accepts the metadata marker, the node-level `animated` list (or bool) and a video file extension, and is pinned by a fixture recorded from this run (`tests/fixtures/history/`).
 
@@ -91,7 +91,7 @@ Spec corrections to apply (spec file is untracked and not edited here):
 
 - **Upscalers are invisible on 0.42 (live issue, not in the spec).** `/object_info/UpscaleModelLoader` returns `["COMBO", {"options": [...]}]`, so the current `_extract_list` returns `[]` and the upscale intent reports nothing installed. The upscale builder also sends a `.pth`/extensionless name while the installed file is `.safetensors`. The tolerant combo parser (WI-2 item 1) and a `resolve_installed_filename`-based upscale name move ahead of WI-4 as a small standalone item.
 - **V1 coverage.** The first V1 run only covered core V1 loaders (legacy shape). Add `UpscaleModelLoader` and the other `comfy_extras` loaders to Section V.
-- **WI-8 is premise-stale.** ComfyUI and `nvidia-smi` both report a single GPU (RTX 5070 Ti, 16303 MiB). `/system_stats` already lists every torch device, primary first. Defer WI-8 until a second GPU is present and use a synthetic two-device fixture. "bytes → GB" must be GiB (`/1024**3`; 15.9 vs 17.1 changes which entries fit). Drop or date the "[observed] cuda:1 = 5060 Ti" claim.
+- **WI-8 is premise-stale.** ComfyUI and `nvidia-smi` both report a single GPU (16303 MiB). `/system_stats` already lists every torch device, primary first. Defer WI-8 until a second GPU is present and use a synthetic two-device fixture. "bytes → GB" must be GiB (`/1024**3`; 15.9 vs 17.1 changes which entries fit). Drop or date the "[observed] cuda:1" claim.
 - **WI-4 cancel race.** Reading `/queue` then acting is check-then-act. 0.42 has `POST /api/jobs/{id}/cancel` (idempotent whatever the job state); prefer it, fall back to `/queue` delete plus a scoped `/interrupt`.
 - **WI-2 evidence is stale.** `UNETLoader` lists 6 files (the 4 Wan 2.2 files plus `xl-inpaint-0.1\diffusion_pytorch_model{,.fp16}.safetensors`), so "`models/unet/` empty" is wrong; `checkpoints/SDXL/` holds `sd_xl_base_1.0`. Update the 2.5 acceptance.
 - **Privacy (public repo).** WI-3's "real filenames from the audit" would publish the maintainer's inventory. Use filenames from ComfyUI's shipped templates; keep the spec untracked or scrubbed.
@@ -108,7 +108,7 @@ Run read-only against `http://127.0.0.1:8000` (ComfyUI Desktop 1.1.8).
 |-------|---------|--------|------------|
 | V1 | `GET /object_info/{CheckpointLoaderSimple,UNETLoader,CLIPLoader,DualCLIPLoader,VAELoader}` | every combo input is the legacy `[[options], {...}]` shape | WI-2 parser must still accept both shapes, but no `COMBO` shape was seen on these loaders. `sampler_name`/`scheduler` were **not** checked. |
 | V2 | `GET /` | `<title>ComfyUI</title>` | existing title probe still matches; the `/system_stats` fallback in WI-1 is belt-and-braces |
-| V5 | `GET /system_stats` | `comfyui_version 0.42.0`, one device (`cuda:0 RTX 5070 Ti`, 17066033152 bytes), pytorch 2.9.1+cu130 | `vram_total` is in bytes. The spec expected a second GPU (RTX 5060 Ti); ComfyUI does not report one. |
+| V5 | `GET /system_stats` | `comfyui_version 0.42.0`, one device (`cuda:0`, 17066033152 bytes), pytorch 2.9.1+cu130 | `vram_total` is in bytes. The spec expected a second GPU; ComfyUI does not report one. |
 | V7 | listed `comfyui_workflow_templates*` in the venv | packages present (`comfyui_workflow_templates` 0.11.96); a filename filter returned mostly cloud `api_*` templates | local Wan 2.2 / LTX / Flux / Qwen templates still to be located before WI-5/WI-6 |
 
 Not yet run (need a real generation, so they occupy the GPU): V3 (binary frames), V4 (cancel), V6 (Stable Audio).

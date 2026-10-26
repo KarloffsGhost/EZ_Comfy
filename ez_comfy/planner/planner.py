@@ -147,7 +147,7 @@ def plan_generation(
         family = "wan_video"
         profile = get_profile(family)
         warnings.append(
-            "Wan 2.2 14B offloads to system RAM on a 16 GB card, so renders are slow. Measured on an RTX 5070 Ti: "
+            "Wan 2.2 14B offloads to system RAM on a 16 GB card, so renders are slow. Measured on a 16 GB card: "
             "512x512, 17 frames, 10 steps took 128 s; the default size (640x640, 81 frames, 20 steps) took 639 s. "
             "Raise --timeout (the default is 300 s), e.g. --timeout 1800."
         )

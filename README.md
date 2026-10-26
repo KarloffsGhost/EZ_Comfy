@@ -58,9 +58,9 @@ Wan 2.2 14B does not fit in 16 GB of VRAM, so ComfyUI offloads to system RAM and
 
 | Setup | Render time | Peak power / temperature |
 |-------|-------------|--------------------------|
-| RTX 5070 Ti 16 GB, alone | 639 s (10.7 min) | 285 W / 65 C |
-| RTX 5070 Ti, while a second card also renders | 693 s | 268 W / 66 C |
-| RTX 5060 Ti 16 GB (PCIe x4 link), while the first card also renders | 1277 s (21 min) | 179 W / 77 C |
+| 16 GB card, alone | 639 s (10.7 min) | 285 W / 65 C |
+| Same card, while a second card also renders | 693 s | 268 W / 66 C |
+| Second 16 GB card (PCIe x4 link), while the first card also renders | 1277 s (21 min) | 179 W / 77 C |
 
 The planner warns about this and tells you to raise `--timeout` (default 300 s) instead of silently changing it. The full run log is in [COMPAT.md](COMPAT.md). Still to come: the 4-step LoRA variant, image-to-video, and LTX.
 
@@ -148,7 +148,7 @@ When you export, EZ Comfy injects a `Note` node directly into the workflow that 
 ```text
 EZ Comfy Provenance
 ═══════════════════════════════════════════════════════════
-GPU           NVIDIA GeForce RTX 5070 Ti  (15.9 GB VRAM)
+GPU           NVIDIA GeForce RTX (15.9 GB VRAM)
 Model         realvisxlV50_v50LightningBakedvae.safetensors
 Family        sdxl_lightning
 Recipe        photo_realism_v1
