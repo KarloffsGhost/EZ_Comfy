@@ -17,7 +17,8 @@ Non-obvious choices, newest first. Each entry: date, decision, why.
 - **Prompt group.** Modern natural-language families (`wan_video`, `ltx_video`, `qwen_image`, `hidream`, `flux2`, `flux3`) now share the `flux` style group so SDXL-style domain packs are not injected into video prompts.
 - **Default negative prompt** for Wan is the template's own (Chinese) text, stored as `_NEG_WAN` with its source cited.
 - **Outputs.** See the live correction above; still images, audio and `gifs` are unchanged.
-- **Still open:** a full-size run (default 640x640, 81 frames, 20 steps) has not been timed, so the planner's 120 s video estimate is a placeholder and the plan only carries a warning to raise `--timeout` (default 300 s) instead of changing the default; the 4-step LoRA variant, image-to-video and LTX; catalog entries and `_intent_compatible_families` for video are untouched (WI-7b).
+- **Full-size run measured (2026-10-25):** the default 640x640, 81 frames, 20 steps took 639 s (10.7 min), 5.06 s of video, GPU 93 % average, 65 C and 285 W peak, VRAM peak about 14.3 GiB. The plan carries that as a warning and tells the user to raise `--timeout` (default 300 s) rather than changing the default; the planner's 120 s video estimate is still a placeholder because two points do not make a model.
+- **Still open:** the 4-step LoRA variant, image-to-video and LTX; catalog entries and `_intent_compatible_families` for video are untouched (WI-7b).
 
 ## 2026-10-25 — Classifier: modern families and `model_overrides` (WI-3)
 
