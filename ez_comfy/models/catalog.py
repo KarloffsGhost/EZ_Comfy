@@ -618,7 +618,9 @@ MODEL_CATALOG: list[ModelCatalogEntry] = [
         family="flux", variant=None,
         source="ByteDance/Hyper-SD",
         # Distinct from flux_dev ("flux1-dev"): this entry is dev + the Hyper-SD LoRA, so it
-        # must not claim the plain dev checkpoint (see DECISIONS.md, 2026-10-24).
+        # must not claim the plain dev checkpoint (see DECISIONS.md, 2026-10-24). The name is
+        # a placeholder for a pre-merged checkpoint; nothing ships under it, so this entry only
+        # reads as installed if the user saves a merge with exactly this name.
         filename="flux1-dev-hyper-8step",
         size_gb=23.8, vram_min_gb=12.0, vram_recommended_gb=16.0,
         strengths=["speed", "prompt_adherence", "text_rendering"],
@@ -903,24 +905,33 @@ def _model_signature_parts(name: str) -> list[str]:
 def _match_rank(expected_name: str, installed_name: str) -> tuple[int, int, int] | None:
     """Rank how well a catalog filename token matches an installed file; None = no match.
 
-    Higher tuples are more specific. Tiers: 4 exact (ignoring extension), 3 catalog token
-    contained in the installed name (longer token wins), 2 installed name contained in the
-    catalog token, 1 fuzzy signature parts (more/longer parts win).
+    Higher tuples are more specific. Tiers: 4 exact (ignoring extension and any folder
+    prefix), 3 catalog token contained in the installed name (longer token wins), 2 installed
+    name contained in the catalog token (SHORTER token wins: a user-supplied alias like "flux"
+    should reach the closest token, not the longest), 1 fuzzy signature parts (more/longer
+    parts win; the token's leading word must be present, so generic words such as "dev" or
+    "fp8" alone cannot attribute an unrelated file to an entry).
     """
     expected_norm = _normalize_model_name(expected_name)
     installed_norm = _normalize_model_name(installed_name)
     installed_stem_norm = _normalize_model_name(_strip_model_extension(installed_name))
+    installed_base_stem_norm = _normalize_model_name(
+        _strip_model_extension(re.split(r"[\\/]", installed_name)[-1])
+    )
 
     if expected_norm:
-        if expected_norm == installed_stem_norm:
+        if expected_norm in (installed_stem_norm, installed_base_stem_norm):
             return (4, len(expected_norm), 0)
         if expected_norm in installed_norm:
             return (3, len(expected_norm), 0)
         if installed_norm in expected_norm:
-            return (2, len(expected_norm), 0)
+            return (2, -len(expected_norm), 0)
 
     parts = _model_signature_parts(expected_name)
     if not parts:
+        return None
+    leading_word = next((p for p in re.split(r"[^a-z0-9]+", expected_name.lower()) if p), "")
+    if leading_word and leading_word not in installed_norm:
         return None
     matched_parts = [p for p in parts if p in installed_norm]
     if len(matched_parts) >= min(2, len(parts)):
@@ -1082,14 +1093,41 @@ def resolve_installed_filename(
         catalog = MODEL_CATALOG
     is_upscaler = entry.family == "upscaler"
     # Compare only against entries of the same kind, and make sure `entry` itself competes
-    # even when it is not part of the default catalog.
-    competitors = [e for e in catalog if (e.family == "upscaler") == is_upscaler and e.id != entry.id]
-    competitors.append(entry)
+    # even when it is not part of the default catalog. Catalog order is kept so the owner
+    # map below is cached across the per-entry calls recommend_models makes.
+    competitors = [e for e in catalog if (e.family == "upscaler") == is_upscaler]
+    if not any(e.id == entry.id for e in competitors):
+        competitors.append(entry)
 
     installed_files = (
         list(inventory.upscale_models) if is_upscaler else [ck.filename for ck in inventory.checkpoints]
     )
-    for installed in installed_files:
-        if match_installed_file(installed, competitors) is entry:
-            return installed
-    return None
+    return _installed_owners(installed_files, competitors).get(entry.id)
+
+
+_OWNER_CACHE: dict[tuple, dict[str, str]] = {}
+_OWNER_CACHE_MAX = 16
+
+
+def _installed_owners(files: list[str], competitors: list[ModelCatalogEntry]) -> dict[str, str]:
+    """Map catalog entry id -> first installed file it owns (most specific match wins).
+
+    Computed once per (inventory files, competitor set) so a recommend pass over the whole
+    catalog costs O(files x entries) instead of O(files x entries^2), and a tied file logs
+    its warning once rather than once per entry.
+    """
+    key = (tuple(files), tuple((e.id, e.filename) for e in competitors))
+    cached = _OWNER_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    owners: dict[str, str] = {}
+    for installed in files:
+        owner = match_installed_file(installed, competitors)
+        if owner is not None:
+            owners.setdefault(owner.id, installed)
+
+    if len(_OWNER_CACHE) >= _OWNER_CACHE_MAX:
+        _OWNER_CACHE.pop(next(iter(_OWNER_CACHE)))
+    _OWNER_CACHE[key] = owners
+    return owners

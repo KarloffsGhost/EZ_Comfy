@@ -259,3 +259,42 @@ def test_summary_includes_provenance():
     assert "provenance" in summary
     assert isinstance(summary["provenance"], dict)
     assert "decisions" in summary["provenance"]
+
+
+# ---------------------------------------------------------------------------
+# WI-7a: catalog matching as seen through the planner
+# ---------------------------------------------------------------------------
+
+def test_planner_asks_for_runnable_models_only(monkeypatch):
+    import ez_comfy.planner.planner as planner_module
+
+    seen = {}
+    real = planner_module.recommend_models
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(planner_module, "recommend_models", spy)
+    plan_generation(_make_request(), _make_hardware(), _make_inventory())
+    assert seen.get("runnable_only") is True
+
+
+def test_ltx_file_is_not_planned_as_flux_dev():
+    """Regression: 'ltx-2.3-22b-dev-fp8' shares only generic words with flux1-dev-fp8."""
+    inv = _make_inventory(["ltx-2.3-22b-dev-fp8.safetensors"])
+    plan = plan_generation(_make_request(prompt="a poster with the text HELLO, typography"),
+                           _make_hardware(), inv)
+    assert plan.checkpoint == "ltx-2.3-22b-dev-fp8.safetensors"
+    assert plan.catalog_entry is None or plan.catalog_entry.family != "flux"
+
+
+@pytest.mark.parametrize("alias, installed, expected_entry_id", [
+    ("sdxl", r"SDXL\sd_xl_base_1.0.safetensors", "sdxl_base_10"),
+    ("flux", "flux1-dev.safetensors", "flux_dev"),
+])
+def test_checkpoint_override_alias_resolves_to_installed_file(alias, installed, expected_entry_id):
+    inv = _make_inventory([installed])
+    plan = plan_generation(_make_request(checkpoint_override=alias), _make_hardware(), inv)
+    assert plan.checkpoint == installed
+    assert plan.catalog_entry.id == expected_entry_id
