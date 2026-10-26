@@ -178,3 +178,82 @@ def test_explicit_model_path_not_overridden_by_desktop_config(tmp_path: Path):
         result = detect_comfyui(explicit_model_path="/explicit/models")
 
     assert result.model_base_path == "/explicit/models"
+
+
+# ---------------------------------------------------------------------------
+# WI-1: config.json basePath source and the /system_stats probe signal
+# ---------------------------------------------------------------------------
+
+def test_config_json_basepath_used_when_no_explicit_path(tmp_path: Path):
+    import json
+
+    current = tmp_path / "current"
+    (current / "models").mkdir(parents=True)
+    old = tmp_path / "old"
+    (old / "models").mkdir(parents=True)
+    yaml_path = tmp_path / "extra_models_config.yaml"
+    yaml_path.write_text(yaml.dump({"comfyui_desktop": {"base_path": str(old)}}), encoding="utf-8")
+    (tmp_path / "config.json").write_text(json.dumps({"basePath": str(current)}), encoding="utf-8")
+
+    with patch("ez_comfy.comfyui.autodetect._probe_port", return_value=False), \
+         patch("ez_comfy.comfyui.autodetect._desktop_app_config_path", return_value=yaml_path):
+        result = detect_comfyui()
+
+    assert result.model_base_path == str(current / "models")
+
+
+def test_config_json_ignored_when_explicit_path_set(tmp_path: Path):
+    import json
+
+    (tmp_path / "models").mkdir()
+    yaml_path = tmp_path / "extra_models_config.yaml"
+    (tmp_path / "config.json").write_text(json.dumps({"basePath": str(tmp_path)}), encoding="utf-8")
+
+    with patch("ez_comfy.comfyui.autodetect._probe_port", return_value=False), \
+         patch("ez_comfy.comfyui.autodetect._desktop_app_config_path", return_value=yaml_path):
+        result = detect_comfyui(explicit_model_path="/explicit/models")
+
+    assert result.model_base_path == "/explicit/models"
+
+
+def test_config_json_with_missing_folder_falls_back_to_yaml(tmp_path: Path):
+    import json
+
+    (tmp_path / "models").mkdir()
+    yaml_path = tmp_path / "extra_models_config.yaml"
+    yaml_path.write_text(yaml.dump({"comfyui_desktop": {"base_path": str(tmp_path)}}), encoding="utf-8")
+    (tmp_path / "config.json").write_text(json.dumps({"basePath": str(tmp_path / "gone")}), encoding="utf-8")
+
+    with patch("ez_comfy.comfyui.autodetect._probe_port", return_value=False), \
+         patch("ez_comfy.comfyui.autodetect._desktop_app_config_path", return_value=yaml_path):
+        result = detect_comfyui()
+
+    assert result.model_base_path == str(tmp_path / "models")
+
+
+def test_config_json_malformed_is_ignored(tmp_path: Path):
+    yaml_path = tmp_path / "extra_models_config.yaml"
+    (tmp_path / "config.json").write_text("{not json", encoding="utf-8")
+    with patch("ez_comfy.comfyui.autodetect._probe_port", return_value=False), \
+         patch("ez_comfy.comfyui.autodetect._desktop_app_config_path", return_value=yaml_path):
+        assert detect_comfyui().model_base_path is None
+
+
+def test_probe_accepts_system_stats_signal():
+    def fake_get(url, **kwargs):
+        if url.endswith("/system_stats"):
+            return httpx.Response(200, json={"system": {"comfyui_version": "9.9.9"}, "devices": []})
+        return httpx.Response(200, text=_OTHER_HTML)      # retitled home page
+
+    with patch("ez_comfy.comfyui.autodetect.httpx.get", side_effect=fake_get):
+        assert _probe_port(8000) is True
+
+
+def test_probe_rejects_json_without_system_key():
+    def fake_get(url, **kwargs):
+        if url.endswith("/system_stats"):
+            return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(200, text=_OTHER_HTML)
+
+    with patch("ez_comfy.comfyui.autodetect.httpx.get", side_effect=fake_get):
+        assert _probe_port(8000) is False

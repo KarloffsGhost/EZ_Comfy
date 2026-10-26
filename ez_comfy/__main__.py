@@ -29,12 +29,14 @@ def _load_settings(config: str | None) -> "Settings":
 # ---------------------------------------------------------------------------
 
 async def _cmd_check(args: argparse.Namespace) -> int:
-    from ez_comfy.comfyui.autodetect import detect_comfyui
+    from ez_comfy.comfyui.autodetect import desktop_model_path, detect_comfyui, stale_model_path_warning
     from ez_comfy.comfyui.client import ComfyUIClient
+    from ez_comfy.compat import version_line
     from ez_comfy.hardware.comfyui_inventory import scan_inventory
     from ez_comfy.hardware.probe import probe_hardware
 
     settings = _load_settings(args.config)
+    configured_model_path = settings.comfyui.model_base_path or None
 
     if settings.comfyui.auto_detect:
         detected = detect_comfyui(
@@ -56,18 +58,42 @@ async def _cmd_check(args: argparse.Namespace) -> int:
         await client.close()
         return 1
 
+    comfyui_version = None
+    try:
+        stats = await client.system_stats()
+        comfyui_version = (stats.get("system") or {}).get("comfyui_version")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Could not read ComfyUI version from /system_stats: %s", exc)
+    print(version_line(comfyui_version))
+
+    stale_warning = stale_model_path_warning(configured_model_path, desktop_model_path())
+    if stale_warning:
+        print(stale_warning)
+
     hw = probe_hardware()
     print(f"GPU     : {hw.gpu_name}  ({hw.gpu_vram_gb:.1f} GB VRAM)")
     print(f"RAM     : {hw.system_ram_gb:.1f} GB")
     print(f"Platform: {hw.platform}")
 
     print("\nScanning inventory …")
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
     print(f"Checkpoints : {len(inv.checkpoints)}")
     for c in inv.checkpoints[:10]:
         print(f"  • {c.filename}  [{c.family}]  {c.size_bytes / 1e9:.1f}GB")
     if len(inv.checkpoints) > 10:
         print(f"  … and {len(inv.checkpoints) - 10} more")
+    if inv.diffusion_models:
+        print(f"Diffusion models (UNETLoader; listed, not yet selectable): {len(inv.diffusion_models)}")
+        for m in inv.diffusion_models[:10]:
+            print(f"  - {m.filename}  [{m.family}]")
+    unclassified = [m.filename for m in inv.all_models() if m.family == "unknown"]
+    if unclassified:
+        print(
+            f"Unclassified: {len(unclassified)} model(s) have no recognised family; set "
+            "`model_overrides: {file name: family}` in config/settings.yaml to name them:"
+        )
+        for name in unclassified[:10]:
+            print(f"  ? {name}")
     print(f"LoRAs       : {len(inv.loras)}")
     print(f"VAEs        : {len(inv.vaes)}")
     print(f"Upscalers   : {len(inv.upscale_models)}")
@@ -90,7 +116,7 @@ async def _cmd_plan(args: argparse.Namespace) -> int:
     settings = _load_settings(args.config)
     client = ComfyUIClient(base_url=settings.comfyui.base_url)
     hw = probe_hardware()
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
     await client.close()
 
     request = GenerationRequest(
@@ -134,7 +160,7 @@ async def _cmd_recommend(args: argparse.Namespace) -> int:
     settings = _load_settings(args.config)
     client = ComfyUIClient(base_url=settings.comfyui.base_url)
     hw = probe_hardware()
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
     await client.close()
 
     intent = args.intent or detect_intent(args.prompt, False, False).value
@@ -171,7 +197,7 @@ async def _cmd_generate(args: argparse.Namespace) -> int:
     settings = _load_settings(args.config)
     client = ComfyUIClient(base_url=settings.comfyui.base_url)
     hw = probe_hardware()
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
 
     ref_bytes: bytes | None = None
     if args.reference:
@@ -188,6 +214,8 @@ async def _cmd_generate(args: argparse.Namespace) -> int:
         width=args.width,
         height=args.height,
         steps=args.steps,
+        video_frames=args.frames,
+        video_fps=args.fps,
         seed=args.seed,
         denoise_strength=args.denoise,
     )
@@ -298,6 +326,8 @@ def main() -> None:
     p_gen.add_argument("--width", type=int)
     p_gen.add_argument("--height", type=int)
     p_gen.add_argument("--steps", type=int)
+    p_gen.add_argument("--frames", type=int, help="Video length in frames (model default if omitted)")
+    p_gen.add_argument("--fps", type=int, help="Video frames per second (model default if omitted)")
     p_gen.add_argument("--seed", type=int, default=-1)
     p_gen.add_argument("--denoise", type=float, default=0.7)
     p_gen.add_argument("--timeout", type=float, default=300.0)

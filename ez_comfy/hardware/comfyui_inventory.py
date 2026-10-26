@@ -45,6 +45,14 @@ class ModelInfo:
     size_bytes: int
     family: str
     variant: str | None = None
+    # Which ComfyUI loader node can load this file: "checkpoint" (CheckpointLoaderSimple) or
+    # "diffusion_model" (UNETLoader). Sending a file to the wrong loader fails at run time.
+    loader: str = "checkpoint"
+    folder: str | None = None   # sub-folder inside the models folder, e.g. "SDXL"
+
+
+CHECKPOINT_LOADER = "checkpoint"
+DIFFUSION_MODEL_LOADER = "diffusion_model"
 
 
 @dataclass
@@ -66,10 +74,28 @@ class ComfyUIInventory:
     discovered_class_types: set[str] = field(default_factory=set)
     samplers: list[str] = field(default_factory=list)
     schedulers: list[str] = field(default_factory=list)
+    # Files only UNETLoader / CLIPVisionLoader / DualCLIPLoader can load. `checkpoints` keeps
+    # holding checkpoint-loader files only, so existing consumers never see these.
+    diffusion_models: list[ModelInfo] = field(default_factory=list)
+    clip_vision_models: list[str] = field(default_factory=list)
+    dual_clip_models: list[str] = field(default_factory=list)
+
+    def all_models(self) -> list[ModelInfo]:
+        """Checkpoints then diffusion models, for display and matching (not for loader selection)."""
+        return [*self.checkpoints, *self.diffusion_models]
+
+    def models_for_loader(self, loader: str) -> list[ModelInfo]:
+        """Only the files the given loader can load."""
+        return [model for model in self.all_models() if model.loader == loader]
 
 
-async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
-    """Query ComfyUI API to build a full inventory of installed models and nodes."""
+async def scan_inventory(
+    client: ComfyUIClient, overrides: dict[str, str] | None = None
+) -> ComfyUIInventory:
+    """Query ComfyUI API to build a full inventory of installed models and nodes.
+
+    `overrides` maps an installed file name to a model family and wins over the classifier.
+    """
     inventory = ComfyUIInventory()
 
     # Discover all class_types from full /object_info dump
@@ -81,7 +107,7 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
         all_info = {}
 
     # Checkpoints
-    inventory.checkpoints = await _get_checkpoints(client, all_info)
+    inventory.checkpoints = await _get_checkpoints(client, all_info, overrides)
 
     # LoRAs
     inventory.loras = await _get_loras(client, all_info)
@@ -99,14 +125,21 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
     inventory.controlnet_models = _extract_list(all_info, "ControlNetLoader", "control_net_name")
 
     # Samplers and schedulers
-    ksampler = all_info.get("KSampler", {})
-    required = ksampler.get("input", {}).get("required", {})
-    inventory.samplers = required.get("sampler_name", [[]])[0] if "sampler_name" in required else []
-    inventory.schedulers = required.get("scheduler", [[]])[0] if "scheduler" in required else []
+    inventory.samplers = _extract_list(all_info, "KSampler", "sampler_name")
+    inventory.schedulers = _extract_list(all_info, "KSampler", "scheduler")
+
+    # Files that only other loaders can load (Wan/Flux/Qwen-style diffusion models, CLIP vision, dual CLIP)
+    inventory.diffusion_models = _get_diffusion_models(all_info, overrides)
+    inventory.clip_vision_models = _extract_list(all_info, "CLIPVisionLoader", "clip_name")
+    inventory.dual_clip_models = _merge_unique(
+        _extract_list(all_info, "DualCLIPLoader", "clip_name1"),
+        _extract_list(all_info, "DualCLIPLoader", "clip_name2"),
+    )
 
     logger.info(
-        "Inventory: %d checkpoints, %d LoRAs, %d VAEs, %d upscalers, %d custom class_types",
+        "Inventory: %d checkpoints, %d diffusion models, %d LoRAs, %d VAEs, %d upscalers, %d custom class_types",
         len(inventory.checkpoints),
+        len(inventory.diffusion_models),
         len(inventory.loras),
         len(inventory.vaes),
         len(inventory.upscale_models),
@@ -115,13 +148,43 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
     return inventory
 
 
-async def _get_checkpoints(client: ComfyUIClient, all_info: dict) -> list[ModelInfo]:
+async def _get_checkpoints(
+    client: ComfyUIClient, all_info: dict, overrides: dict[str, str] | None = None
+) -> list[ModelInfo]:
     names = _extract_list(all_info, "CheckpointLoaderSimple", "ckpt_name")
     results = []
     for name in names:
-        family, variant = classify_checkpoint(name)
-        results.append(ModelInfo(filename=name, size_bytes=0, family=family, variant=variant))
+        family, variant = classify_checkpoint(name, overrides=overrides)
+        results.append(ModelInfo(
+            filename=name, size_bytes=0, family=family, variant=variant,
+            loader=CHECKPOINT_LOADER, folder=_folder_of(name),
+        ))
     return results
+
+
+def _get_diffusion_models(all_info: dict, overrides: dict[str, str] | None = None) -> list[ModelInfo]:
+    results = []
+    for name in _extract_list(all_info, "UNETLoader", "unet_name"):
+        family, variant = classify_checkpoint(name, overrides=overrides)
+        results.append(ModelInfo(
+            filename=name, size_bytes=0, family=family, variant=variant,
+            loader=DIFFUSION_MODEL_LOADER, folder=_folder_of(name),
+        ))
+    return results
+
+
+def _folder_of(filename: str) -> str | None:
+    """'SDXL\\base.safetensors' -> 'SDXL'; a bare file name -> None."""
+    parts = filename.replace("\\", "/").rsplit("/", 1)
+    return parts[0] if len(parts) == 2 else None
+
+
+def _merge_unique(*lists: list[str]) -> list[str]:
+    seen: dict[str, None] = {}
+    for items in lists:
+        for item in items:
+            seen.setdefault(item, None)
+    return list(seen)
 
 
 async def _get_loras(client: ComfyUIClient, all_info: dict) -> list[LoRAInfo]:
@@ -134,11 +197,35 @@ async def _get_loras(client: ComfyUIClient, all_info: dict) -> list[LoRAInfo]:
 
 
 def _extract_list(all_info: dict, node_class: str, input_key: str) -> list[str]:
-    node = all_info.get(node_class, {})
+    """Return a combo input's option list from an /object_info dump.
+
+    ComfyUI emits two shapes for combo inputs and both are live in 0.42:
+      legacy: [["a.safetensors", "b.safetensors"], {...}]
+      COMBO:  ["COMBO", {"options": ["a.safetensors", "b.safetensors"], ...}]  (e.g. UpscaleModelLoader)
+    A missing node or input yields []; an unrecognised shape is logged and yields [].
+    """
+    node = all_info.get(node_class)
+    if not node:
+        logger.debug("%s not in /object_info; no %s options", node_class, input_key)
+        return []
     required = node.get("input", {}).get("required", {})
-    entry = required.get(input_key, [[]])
-    if entry and isinstance(entry[0], list):
-        return entry[0]
+    if input_key not in required:
+        logger.debug("%s has no required input %r; no options", node_class, input_key)
+        return []
+
+    entry = required[input_key]
+    if isinstance(entry, list) and entry:
+        first = entry[0]
+        if isinstance(first, list):
+            return first
+        if first == "COMBO" and len(entry) > 1 and isinstance(entry[1], dict):
+            options = entry[1].get("options")
+            if isinstance(options, list):
+                return options
+
+    logger.warning(
+        "Unrecognised combo shape for %s.%s: %.120r", node_class, input_key, entry
+    )
     return []
 
 

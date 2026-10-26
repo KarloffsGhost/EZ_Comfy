@@ -2,18 +2,19 @@
 
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-232%20passing-brightgreen.svg)](tests/)
-[![ComfyUI](https://img.shields.io/badge/ComfyUI-API-orange.svg)](https://github.com/comfyanonymous/ComfyUI)
+[![Tests](https://img.shields.io/badge/tests-440%20passing-brightgreen.svg)](tests/)
+[![ComfyUI](https://img.shields.io/badge/ComfyUI-0.42.0-orange.svg)](COMPAT.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 
 > **Prompt in. ComfyUI workflow out.**
 
-EZ Comfy is a hardware-aware command center for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). You describe what you want; it picks the right installed model, builds the workflow, adapts the prompt syntax, protects VRAM, and records every decision so you can inspect or export the result.
+EZ Comfy is a hardware-aware command center for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). You describe what you want; it picks the right installed model, builds the workflow, adapts the prompt syntax, protects VRAM, and records every decision so you can inspect or export the result. Images, audio, and now **video** (Wan 2.2).
 
 No node graph wrangling. No guessing checkpoint settings. No hidden "why did it choose that?" behavior.
 
 ![EZ Comfy Web UI](assets/screenshot-ui.png)
-<!-- Screenshot: open http://127.0.0.1:7860, type a prompt, generate, capture the result. Save as assets/screenshot-ui.png -->
+
+*One prompt, no settings. The "What EZ Comfy decided for you" panel shows every choice (model, recipe, steps, CFG, sampler, resolution, seed), where it came from, and why.*
 
 Plan, generate, compare, and export ComfyUI-ready workflows from one local web UI.
 
@@ -40,6 +41,33 @@ CFG         1.5
 Why: best installed photorealistic SDXL model that fits your GPU.
 ```
 
+## Video With Wan 2.2
+
+EZ Comfy ships a Wan 2.2 14B text-to-video recipe (`video_wan22_t2v`). It finds the installed high-noise and low-noise model pair, the umt5 text encoder, and the Wan VAE, and composes the two-stage graph for you.
+
+```bash
+python -m ez_comfy generate "a lighthouse on a rocky coast at sunset, waves crashing, cinematic" \
+    --intent video --recipe video_wan22_t2v --timeout 1800
+```
+
+![Four frames from a Wan 2.2 render](assets/wan22-video-frames.jpg)
+
+*Frames 0, 27, 54 and 80 of an 81-frame, 640x640, 16 fps clip (5 seconds) rendered through EZ Comfy.*
+
+Wan 2.2 14B does not fit in 16 GB of VRAM, so ComfyUI offloads to system RAM and renders are slow. Measured results (ComfyUI 0.42.0, default 640x640, 81 frames, 20 steps):
+
+| Setup | Render time | Peak power / temperature |
+|-------|-------------|--------------------------|
+| RTX 5070 Ti 16 GB, alone | 639 s (10.7 min) | 285 W / 65 C |
+| RTX 5070 Ti, while a second card also renders | 693 s | 268 W / 66 C |
+| RTX 5060 Ti 16 GB (PCIe x4 link), while the first card also renders | 1277 s (21 min) | 179 W / 77 C |
+
+The planner warns about this and tells you to raise `--timeout` (default 300 s) instead of silently changing it. The full run log is in [COMPAT.md](COMPAT.md). Still to come: the 4-step LoRA variant, image-to-video, and LTX.
+
+## Two GPUs
+
+EZ Comfy has been run against two cards at once by starting one ComfyUI instance per GPU (`--cuda-device 0` and `--cuda-device 1`, on different ports) and pointing a separate EZ Comfy process at each. Both cards rendered the same Wan 2.2 job at the same time with the combined GPU draw around 430 W and no failures. Treat it as one job per card: nothing splits a single model across cards. Automatic routing between instances is not built yet; for now you choose the instance with `comfyui.base_url`.
+
 ## Why It Matters
 
 | Without EZ Comfy | With EZ Comfy |
@@ -50,15 +78,20 @@ Why: best installed photorealistic SDXL model that fits your GPU.
 | Wonder why a result changed | Shows a provenance trail for every automated decision |
 | Fight Ollama and ComfyUI for GPU memory | Evicts Ollama before generation and frees ComfyUI afterward |
 | Rebuild work manually in ComfyUI | Exports workflow JSON with an embedded provenance note |
+| Hit a confusing error after a ComfyUI update | `check` tells you when your ComfyUI version is outside the tested range |
 
 ## Current Status
 
-- 232 tests passing.
+- 440 tests passing.
+- Tested against ComfyUI 0.42.0 (see [COMPAT.md](COMPAT.md)); `check` warns, and never fails, outside that range.
 - Local ComfyUI Desktop and standalone server auto-detection.
 - Curated model catalog with SDXL, SD 1.5, Pony/NoobAI, Flux, video, audio, inpaint, and upscaler entries.
+- Wan 2.2 14B text-to-video recipe, verified on real hardware.
 - CLI, REST API, and local web UI.
 - Workflow export with embedded ComfyUI `Note` provenance.
 - GPU-locked generation queue with Ollama VRAM handoff.
+- Live progress over ComfyUI's websocket (including binary preview frames) and cancellation of a running job.
+- `model_overrides` setting to tell EZ Comfy which family a model it does not recognise belongs to.
 
 ## What You Stop Worrying About
 
@@ -79,10 +112,10 @@ Why: best installed photorealistic SDXL model that fits your GPU.
 | `img2img` | Reference image + transform prompt |
 | `inpaint` | Reference image + mask |
 | `upscale` | Upscale/enhance prompt or high-res intent |
-| `video` | Animate/video prompt or reference image |
+| `video` | Animate/video prompt or reference image; pass `--intent video` for text-to-video |
 | `audio` | Sound/music/audio prompt |
 
-EZ Comfy selects from workflow recipes such as txt2img basic, hi-res fix, photo realism, img2img, ControlNet canny, inpaint, upscale+refine, SVD, and Stable Audio, then composes the ComfyUI node graph automatically.
+EZ Comfy selects from workflow recipes such as txt2img basic, hi-res fix, photo realism, img2img, ControlNet canny, inpaint, upscale+refine, SVD, Wan 2.2 text-to-video, and Stable Audio, then composes the ComfyUI node graph automatically.
 
 ## Model-Specific Prompt Handling
 
@@ -157,15 +190,16 @@ After each generation, EZ Comfy writes a JSON sidecar to `{output_dir}/ez_comfy_
 
 ### Requirements
 - Python 3.11+
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) running locally (default: `http://127.0.0.1:8188`)
+- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) running locally (auto-detected on ports 8188, 8000, 8189 and 8001)
 - At least one model checkpoint installed in ComfyUI
 - NVIDIA GPU (CPU generation not tested)
+- For video: the Wan 2.2 14B high-noise and low-noise models, the umt5 text encoder, and the Wan VAE
 
 ### Install
 
 ```bash
-git clone https://github.com/KarloffsGhost/ez-comfy
-cd ez-comfy
+git clone https://github.com/KarloffsGhost/EZ_Comfy
+cd EZ_Comfy
 pip install -e ".[dev]"
 ```
 
@@ -189,7 +223,7 @@ python -m ez_comfy check
 
 Output:
 ```
-Detected ComfyUI at http://127.0.0.1:8188 (source: probe)
+Detected ComfyUI at http://127.0.0.1:8000 (source: probe)
 GPU     : NVIDIA GeForce RTX 4070  (12.0 GB VRAM)
 RAM     : 32.0 GB
 Platform: win32
@@ -203,6 +237,8 @@ LoRAs       : 3
 Capabilities: ['ControlNetLoader', 'IPAdapterModelLoader', ...]
 ```
 
+`check` also warns (it never changes anything) if `comfyui.model_base_path` points at a folder that no longer
+exists, and if your ComfyUI version is outside the range listed in [COMPAT.md](COMPAT.md).
 
 ### Generate from the command line
 
@@ -217,13 +253,11 @@ python -m ez_comfy serve --port 7860
 # Open http://127.0.0.1:7860
 ```
 
-
 ### Preview what would happen (no GPU used)
 
 ```bash
 python -m ez_comfy plan "a portrait of an astronaut"
 ```
-
 
 ### See model recommendations
 
@@ -242,7 +276,7 @@ standard local installs:
 ```yaml
 comfyui:
   auto_detect: true
-  # base_url: "http://127.0.0.1:8188"      # Optional manual override
+  # base_url: "http://127.0.0.1:8000"      # Optional manual override
   # model_base_path: "/path/to/ComfyUI/models"
   output_dir: "output"                    # ComfyUI output directory (for sidecar metadata)
 
@@ -253,6 +287,10 @@ ollama:
 preferences:
   prefer_speed: true                       # Prefer faster model variants (Lightning/Turbo)
   auto_negative_prompt: true               # Auto-generate negatives per model family
+
+# Name models the classifier cannot recognise (file name exactly as `check` prints it):
+# model_overrides:
+#   "myMerge_v9.safetensors": sdxl
 ```
 
 **Environment variable overrides** (useful for Docker / CI):
@@ -286,9 +324,11 @@ generate options:
   --width INT                 Output width (snapped to bucket)
   --height INT                Output height (snapped to bucket)
   --steps INT                 Override sampling steps
+  --frames INT                Video length in frames (model default if omitted)
+  --fps INT                   Video frames per second (model default if omitted)
   --seed INT                  Seed (-1 = random)
   --denoise FLOAT             Denoise strength for img2img (default: 0.7)
-  --timeout FLOAT             Generation timeout in seconds (default: 300)
+  --timeout FLOAT             Generation timeout in seconds (default: 300; use 1800 for Wan 2.2)
 
 serve options:
   --host TEXT                 Bind host (default: 127.0.0.1)
@@ -382,7 +422,7 @@ ez_comfy/
 ```
 User prompt
     │
-    ▼ Intent detection        txt2img? img2img? upscale? audio?
+    ▼ Intent detection        txt2img? img2img? upscale? audio? video?
     │                         → Decision(parameter="intent", source="recommendation"|"prompt_keyword")
     ▼ Model selection         catalog × inventory × VRAM × task scoring
     │                         → Decision(parameter="checkpoint", alternatives=[...rejected...])
@@ -407,11 +447,14 @@ User prompt
 - **Provenance is structural, not reconstructed.** `ProvenanceRecord` is built incrementally during `plan_generation()` — each decision is recorded at the moment it's made, not inferred after the fact.
 - **Note node injection uses ComfyUI's built-in `Note` class_type.** No custom nodes required. The note appears on the canvas when you drag the exported workflow in.
 - **Capability-based recipe selection.** Recipes declare required ComfyUI `class_type` names (e.g. `"ControlNetLoader"`). The inventory checks `GET /object_info` at startup to discover what's installed. If a capability is missing, a simpler recipe is chosen and the user is warned.
+- **Multi-file recipes.** A recipe can need several model files (Wan 2.2 needs two diffusion models, a text encoder and a VAE), so a plan carries a role for each file rather than a single checkpoint.
 - **Single GPU lock.** `asyncio.Lock` in `GenerationEngine` ensures no concurrent submissions, regardless of whether the request came from the API, CLI, or the background queue.
 - **WebSocket-primary, HTTP polling fallback.** Progress events come from `ws://comfyui/ws`. If the WebSocket fails for any reason, silent fallback to `GET /history` polling.
 - **VRAM guard is a context manager.** `async with vram_guard(client, ollama_url)` wraps every generation. The `finally` block always frees ComfyUI VRAM even if generation fails.
 - **Sidecar writes are best-effort.** Wrapped in `try/except` so a metadata write failure never aborts a generation.
 - **No model downloads.** EZ Comfy shows download instructions (HuggingFace CLI commands, Civitai links) but never downloads files itself.
+
+Decisions and the reasons behind them are recorded in [DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -440,10 +483,10 @@ ModelCatalogEntry(
 ## Running Tests
 
 ```bash
-pytest tests/unit/ -v
+pytest tests/ -v
 ```
 
-All 232 tests run in under 1 second with no ComfyUI connection required.
+All 440 tests run in a few seconds with no ComfyUI connection required.
 
 ---
 

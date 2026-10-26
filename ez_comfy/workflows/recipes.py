@@ -21,6 +21,16 @@ class Recipe:
     supports_controlnet: bool
     builder: str                         # function name in workflow builders
     settings_overrides: dict | None = None
+    # Loader node the recipe feeds its model into (see ModelInfo.loader). Every current
+    # builder uses CheckpointLoaderSimple.
+    model_loader: str = "checkpoint"
+    # Model families the recipe supports. Empty = any legacy (single-checkpoint) family; such a
+    # recipe is never used with a MODERN_FAMILIES model.
+    families: list[str] = field(default_factory=list)
+
+
+# Families that need their own recipe (multi-file models loaded through UNETLoader and friends).
+MODERN_FAMILIES = frozenset({"wan_video", "ltx_video", "qwen_image", "hidream", "flux2", "flux3"})
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +181,26 @@ RECIPES: list[Recipe] = [
         builder="build_video_svd",
     ),
 
+    Recipe(
+        id="video_wan22_t2v",
+        name="Wan 2.2 text-to-video",
+        description=(
+            "Text-to-video with the Wan 2.2 14B pair: a high-noise and a low-noise expert used in two "
+            "sampling passes of one run. Needs both t2v files, the umt5 text encoder and the Wan VAE."
+        ),
+        intent=PipelineIntent.VIDEO,
+        priority=5,
+        when="Generate a short video from a text description",
+        required_capabilities=[],
+        requires_reference_image=False,
+        requires_mask=False,
+        supports_lora=False,
+        supports_controlnet=False,
+        builder="build_video_wan22_t2v",
+        model_loader="diffusion_model",
+        families=["wan_video"],
+    ),
+
     # --- audio ---
     Recipe(
         id="audio_stable",
@@ -199,6 +229,7 @@ def select_recipe(
     has_mask: bool,
     discovered_class_types: set[str],
     recipe_override: str | None = None,
+    family: str | None = None,
 ) -> tuple[Recipe, list[tuple[Recipe, str]]]:
     """Select the best recipe for the given intent and context.
 
@@ -228,6 +259,22 @@ def select_recipe(
 
     # Filter: intent match
     candidates = [r for r in RECIPES if r.intent == intent]
+
+    # Filter: model family. Recipes that name families need one of them; recipes that name none
+    # are legacy single-checkpoint recipes and cannot run a modern multi-file family.
+    if family is not None:
+        for r in candidates[:]:
+            if r.families and family not in r.families:
+                rejected.append((r, f"supports families {r.families}, not {family!r}"))
+                candidates.remove(r)
+            elif not r.families and family in MODERN_FAMILIES:
+                rejected.append((r, f"legacy recipe cannot run the {family!r} family"))
+                candidates.remove(r)
+    else:
+        for r in candidates[:]:
+            if r.families:
+                rejected.append((r, "needs a specific model family (none chosen)"))
+                candidates.remove(r)
 
     # Filter: reference image + mask requirements
     if not has_reference_image:

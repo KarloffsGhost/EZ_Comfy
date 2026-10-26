@@ -1,0 +1,8 @@
+{
+  "source": "ComfyUI 0.42.0, per-prompt extra_data.preview_method=latent2rgb, SD1.5 512x512 25 steps, captured 2026-10-24",
+  "note": "Header bytes only (first 16 bytes of real binary frames); no image data or personal data.",
+  "frames": [
+    {"header16_hex": "0000000100000001ffd8ffe000104a46", "total_length": 49714}
+  ],
+  "observed_event_types": [1]
+}

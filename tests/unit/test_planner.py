@@ -259,3 +259,125 @@ def test_summary_includes_provenance():
     assert "provenance" in summary
     assert isinstance(summary["provenance"], dict)
     assert "decisions" in summary["provenance"]
+
+
+# ---------------------------------------------------------------------------
+# WI-7a: catalog matching as seen through the planner
+# ---------------------------------------------------------------------------
+
+def test_planner_asks_for_runnable_models_only(monkeypatch):
+    import ez_comfy.planner.planner as planner_module
+
+    seen = {}
+    real = planner_module.recommend_models
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(planner_module, "recommend_models", spy)
+    plan_generation(_make_request(), _make_hardware(), _make_inventory())
+    assert seen.get("runnable_only") is True
+
+
+def test_ltx_file_is_not_planned_as_flux_dev():
+    """Regression: 'ltx-2.3-22b-dev-fp8' shares only generic words with flux1-dev-fp8."""
+    inv = _make_inventory(["ltx-2.3-22b-dev-fp8.safetensors"])
+    plan = plan_generation(_make_request(prompt="a poster with the text HELLO, typography"),
+                           _make_hardware(), inv)
+    assert plan.checkpoint == "ltx-2.3-22b-dev-fp8.safetensors"
+    assert plan.catalog_entry is None or plan.catalog_entry.family != "flux"
+
+
+@pytest.mark.parametrize("alias, installed, expected_entry_id", [
+    ("sdxl", r"SDXL\sd_xl_base_1.0.safetensors", "sdxl_base_10"),
+    ("flux", "flux1-dev.safetensors", "flux_dev"),
+])
+def test_checkpoint_override_alias_resolves_to_installed_file(alias, installed, expected_entry_id):
+    inv = _make_inventory([installed])
+    plan = plan_generation(_make_request(checkpoint_override=alias), _make_hardware(), inv)
+    assert plan.checkpoint == installed
+    assert plan.catalog_entry.id == expected_entry_id
+
+
+# ---------------------------------------------------------------------------
+# WI-2: loader compatibility guard
+# ---------------------------------------------------------------------------
+
+def _inventory_with(checkpoints: list[ModelInfo], diffusion: list[ModelInfo] | None = None) -> ComfyUIInventory:
+    inv = _make_inventory()
+    inv.checkpoints = checkpoints
+    inv.diffusion_models = diffusion or []
+    return inv
+
+
+def test_diffusion_model_never_selected_for_checkpoint_recipe():
+    wan = ModelInfo("wan2.2_t2v_14B.safetensors", 0, "unknown", loader="diffusion_model")
+    sd15 = ModelInfo("DreamShaper_8_pruned.safetensors", 0, "sd15")
+    plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([sd15], [wan]))
+    assert plan.checkpoint == "DreamShaper_8_pruned.safetensors"
+
+
+def test_diffusion_model_misplaced_in_checkpoints_is_still_not_selected():
+    """Defends against a scan bug that would put a UNET file in the checkpoint list."""
+    wan = ModelInfo("wan2.2_t2v_14B.safetensors", 0, "unknown", loader="diffusion_model")
+    sd15 = ModelInfo("DreamShaper_8_pruned.safetensors", 0, "sd15")
+    plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([wan, sd15]))
+    assert plan.checkpoint == "DreamShaper_8_pruned.safetensors"
+
+
+def test_explicit_override_cannot_pick_a_diffusion_model_file():
+    wan = ModelInfo("wan2.2_t2v_14B.safetensors", 0, "unknown", loader="diffusion_model")
+    sd15 = ModelInfo("DreamShaper_8_pruned.safetensors", 0, "sd15")
+    inv = _inventory_with([sd15], [wan])
+    plan = plan_generation(
+        _make_request(prompt="a dragon", checkpoint_override="wan2.2_t2v_14B.safetensors"), _make_hardware(), inv
+    )
+    # The override is passed through as typed (existing behavior for unknown names) but it is not
+    # reported as an installed checkpoint-loader file.
+    decision = next(d for d in plan.provenance.decisions if d.parameter == "checkpoint")
+    assert "not found in catalog" in decision.reason
+
+
+def test_only_diffusion_models_installed_raises_instead_of_using_one():
+    wan = ModelInfo("wan2.2_t2v_14B.safetensors", 0, "unknown", loader="diffusion_model")
+    with pytest.raises(RuntimeError, match="No checkpoints found"):
+        plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([], [wan]))
+
+
+def test_planner_fallback_prefers_a_family_that_suits_the_intent():
+    unknown = ModelInfo("mystery_model.safetensors", 0, "unknown")
+    known = ModelInfo("totally_custom_name.safetensors", 0, "sd15")
+    plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([unknown, known]))
+    assert plan.checkpoint == "totally_custom_name.safetensors"
+
+
+def test_planner_fallback_skips_audio_and_video_families_for_an_image_prompt():
+    audio = ModelInfo("some_audio_model.safetensors", 0, "stable_audio")
+    video = ModelInfo("some_video_model.safetensors", 0, "ltx_video")
+    unknown = ModelInfo("mystery_model.safetensors", 0, "unknown")
+    plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([audio, video, unknown]))
+    assert plan.checkpoint == "mystery_model.safetensors"
+
+
+def test_planner_fallback_uses_first_when_all_unknown():
+    a = ModelInfo("aaa.safetensors", 0, "unknown")
+    b = ModelInfo("bbb.safetensors", 0, "unknown")
+    plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([a, b]))
+    assert plan.checkpoint == "aaa.safetensors"
+
+
+def test_recipe_needing_another_loader_adds_a_warning(monkeypatch):
+    from dataclasses import replace
+
+    from ez_comfy.planner import planner as planner_module
+
+    real_select = planner_module.select_recipe
+
+    def select_with_unet_recipe(**kwargs):
+        recipe, rejected = real_select(**kwargs)
+        return replace(recipe, model_loader="diffusion_model"), rejected
+
+    monkeypatch.setattr(planner_module, "select_recipe", select_with_unet_recipe)
+    plan = plan_generation(_make_request(), _make_hardware(), _make_inventory())
+    assert any("diffusion_model" in w for w in plan.warnings)

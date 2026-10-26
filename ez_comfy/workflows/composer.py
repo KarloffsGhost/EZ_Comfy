@@ -10,6 +10,7 @@ from ez_comfy.workflows.inpaint import build_inpaint_basic
 from ez_comfy.workflows.txt2img import build_photo_realism_v1, build_txt2img_basic, build_txt2img_hires_fix
 from ez_comfy.workflows.upscale import build_upscale_refine, build_upscale_simple
 from ez_comfy.workflows.video import build_video_svd
+from ez_comfy.workflows.video_wan import build_video_wan22_t2v
 
 _BUILDERS = {
     "build_photo_realism_v1":           build_photo_realism_v1,
@@ -21,6 +22,7 @@ _BUILDERS = {
     "build_upscale_simple":             build_upscale_simple,
     "build_upscale_refine":             build_upscale_refine,
     "build_video_svd":                  build_video_svd,
+    "build_video_wan22_t2v":           build_video_wan22_t2v,
     "build_audio_stable":               build_audio_stable,
 }
 

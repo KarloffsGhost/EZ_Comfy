@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from ez_comfy import __version__
+
 
 class GenerateRequest(BaseModel):
     """Request body for POST /v1/generate (JSON-only path, no image uploads)."""
@@ -139,6 +141,10 @@ class InventoryResponse(BaseModel):
     samplers: list[str]
     schedulers: list[str]
     discovered_capabilities: list[str]
+    # Additive: files other loaders can load. Never selected for generation yet.
+    diffusion_models: list[str] = Field(default_factory=list)
+    clip_vision_models: list[str] = Field(default_factory=list)
+    dual_clip_models: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -149,4 +155,4 @@ class HealthResponse(BaseModel):
     gpu_vram_gb: float
     checkpoints_loaded: int
     queue_depth: int
-    version: str = "1.0.0"
+    version: str = __version__

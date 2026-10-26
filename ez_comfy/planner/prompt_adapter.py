@@ -260,7 +260,8 @@ def _family_group(family: str) -> str:
     """Map specific family to a style preset group key."""
     if family in ("pony",):
         return "pony"
-    if family in ("flux", "flux_schnell"):
+    # Natural-language families (no weighted syntax) share the flux group.
+    if family in ("flux", "flux_schnell", "flux2", "flux3", "wan_video", "ltx_video", "qwen_image", "hidream"):
         return "flux"
     if family in ("sd15", "sd15_lightning"):
         return "sd15"

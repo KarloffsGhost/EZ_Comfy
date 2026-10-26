@@ -3,12 +3,14 @@ Auto-detect a locally running ComfyUI instance and its model base path.
 
 Resolution order (first hit wins for each field):
   1. Explicit value already in Settings (caller passes it through)
-  2. ComfyUI Desktop app config  (%APPDATA%/ComfyUI/extra_models_config.yaml on Windows)
+  2. ComfyUI Desktop app config  (%APPDATA%/ComfyUI/config.json `basePath`, then
+     extra_models_config.yaml, in the same folder)
   3. Port probe — tries common ports until a ComfyUI HTML page responds
   4. Hard-coded defaults
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -47,6 +49,62 @@ def _desktop_app_config_path() -> Path | None:
     return None
 
 
+def _parse_desktop_config_json(config_path: Path) -> str | None:
+    """
+    Read the models directory from ComfyUI Desktop's config.json (`basePath`).
+    Returns None when the file is missing, unreadable, or points at a missing folder.
+    """
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read desktop app config %s: %s", config_path, exc)
+        return None
+
+    base = data.get("basePath") if isinstance(data, dict) else None
+    if not isinstance(base, str) or not base:
+        return None
+    candidate = Path(base)
+    models_dir = candidate / "models"
+    if models_dir.exists():
+        return str(models_dir)
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
+def desktop_model_path() -> str | None:
+    """
+    The models directory ComfyUI Desktop currently uses, ignoring any explicit setting.
+    config.json (`basePath`) wins over extra_models_config.yaml, which is the older source.
+    Used by `check` to suggest a replacement for a stale configured path.
+    """
+    yaml_path = _desktop_app_config_path()
+    if yaml_path is None:
+        return None
+    json_path = yaml_path.parent / "config.json"
+    if json_path.exists():
+        found = _parse_desktop_config_json(json_path)
+        if found:
+            return found
+    if yaml_path.exists():
+        return _parse_desktop_config(yaml_path)[1]
+    return None
+
+
+def stale_model_path_warning(configured: str | None, suggestion: str | None) -> str | None:
+    """
+    Warning text when an explicitly configured model path does not exist, else None.
+    Warn-only: callers must not change the configured value.
+    """
+    if not configured or Path(configured).exists():
+        return None
+    text = f"[WARN] comfyui.model_base_path '{configured}' does not exist."
+    if suggestion and Path(suggestion) != Path(configured):
+        text += f" ComfyUI Desktop currently uses '{suggestion}'; update config/settings.yaml if that is intended."
+    return text
+
+
 def _parse_desktop_config(config_path: Path) -> tuple[str | None, str | None]:
     """
     Parse ComfyUI Desktop's extra_models_config.yaml.
@@ -80,14 +138,21 @@ def _parse_desktop_config(config_path: Path) -> tuple[str | None, str | None]:
 
 def _probe_port(port: int) -> bool:
     """Return True if a ComfyUI instance is running on localhost:{port}."""
+    base = f"http://127.0.0.1:{port}"
     try:
-        resp = httpx.get(
-            f"http://127.0.0.1:{port}/",
-            timeout=_PROBE_TIMEOUT,
-            follow_redirects=True,
-        )
-        return resp.status_code == 200 and _COMFYUI_TITLE in resp.text
-    except Exception:
+        resp = httpx.get(f"{base}/", timeout=_PROBE_TIMEOUT, follow_redirects=True)
+        if resp.status_code == 200 and _COMFYUI_TITLE in resp.text:
+            return True
+    except httpx.HTTPError as exc:
+        logger.debug("ComfyUI probe of %s/ failed: %s", base, exc)
+        return False
+    # Newer frontends may change the page title; /system_stats is the stable signal.
+    try:
+        resp = httpx.get(f"{base}/system_stats", timeout=_PROBE_TIMEOUT)
+        body = resp.json() if resp.status_code == 200 else None
+        return isinstance(body, dict) and isinstance(body.get("system"), dict)
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.debug("ComfyUI probe of %s/system_stats failed: %s", base, exc)
         return False
 
 
@@ -113,12 +178,15 @@ def detect_comfyui(
     model_path = explicit_model_path
     source = "config_file" if explicit_url else "default"
 
-    # 2. Desktop app config — may provide the model path
+    # 2. Desktop app config — may provide the model path (config.json first, then the yaml)
     config_path = _desktop_app_config_path()
-    if config_path and config_path.exists():
-        _, desktop_model_path = _parse_desktop_config(config_path)
-        if desktop_model_path and not model_path:
-            model_path = desktop_model_path
+    if config_path and not model_path:
+        json_path = config_path.parent / "config.json"
+        found = _parse_desktop_config_json(json_path) if json_path.exists() else None
+        if not found and config_path.exists():
+            _, found = _parse_desktop_config(config_path)
+        if found:
+            model_path = found
             logger.debug("Model path from Desktop app config: %s", model_path)
 
     # 3. Port probe — only if no explicit URL given

@@ -267,3 +267,21 @@ def test_note_node_has_meta_title():
     nodes = compose_annotated_workflow(plan)
     note = next(n for n in nodes.values() if n.get("class_type") == "Note")
     assert note.get("_meta", {}).get("title") == "EZ Comfy Provenance"
+
+
+# ---------------------------------------------------------------------------
+# upscale model filename (ComfyUI lists "RealESRGAN_x4plus.safetensors", not the catalog token)
+# ---------------------------------------------------------------------------
+
+def test_upscale_uses_exact_installed_filename_from_recommendations():
+    from ez_comfy.hardware.comfyui_inventory import ComfyUIInventory
+    from ez_comfy.hardware.probe import HardwareProfile
+    from ez_comfy.models.catalog import recommend_models
+
+    hw = HardwareProfile(gpu_name="t", gpu_vram_gb=16.0, system_ram_gb=32.0,
+                         cuda_version="12.4", platform="win32")
+    inv = ComfyUIInventory(upscale_models=["RealESRGAN_x4plus.safetensors"])
+    recs = recommend_models("upscale this", "upscale", hw, inv, top_n=10)
+    plan = _make_plan("upscale_simple", PipelineIntent.UPSCALE, recommendations=recs)
+    nodes = compose_workflow(plan)
+    assert nodes["20"]["inputs"]["model_name"] == "RealESRGAN_x4plus.safetensors"
