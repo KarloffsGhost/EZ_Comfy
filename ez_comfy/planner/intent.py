@@ -13,8 +13,9 @@ class PipelineIntent(str, Enum):
 
 
 _VIDEO_KEYWORDS = {
-    "video", "animate", "animation", "motion", "mov", "gif",
-    "film", "cinematic video", "moving",
+    "video", "animate", "animation",
+    "gif", "film clip", "film footage", "cinematic video", "moving image",
+    "make it move", "bring to life",
 }
 _AUDIO_KEYWORDS = {
     "sound", "audio", "music", "song", "melody", "beat", "sfx",
