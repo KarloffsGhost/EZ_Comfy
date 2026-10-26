@@ -117,3 +117,109 @@ def test_recommend_upscale_marks_installed_upscaler():
     recs = recommend_models("upscale this", "upscale", hw, inv, top_n=5)
     installed = [r for r in recs if r.installed and r.entry.family == "upscaler"]
     assert installed, "Expected at least one installed upscaler recommendation"
+
+
+# ---------------------------------------------------------------------------
+# Catalog structure tests (from spec/IMPROVEMENTS_SPEC.md §2.5)
+# ---------------------------------------------------------------------------
+
+def test_minimum_entry_count():
+    assert len(MODEL_CATALOG) >= 35, f"Catalog has only {len(MODEL_CATALOG)} entries; need >= 35"
+
+
+def test_bucket_distribution():
+    """Each required family bucket must meet minimum counts."""
+    minimums = {
+        "sdxl_photorealism": (
+            [e for e in MODEL_CATALOG if e.family == "sdxl"
+             and any(s in e.strengths for s in ["photorealism", "cinematic", "portraits"])],
+            4,
+        ),
+        "sdxl_stylized": (
+            [e for e in MODEL_CATALOG if e.family == "sdxl"
+             and any(s in e.strengths for s in ["artistic", "fantasy", "stylized"])],
+            3,
+        ),
+        "pony": (
+            [e for e in MODEL_CATALOG if e.family == "pony"],
+            3,
+        ),
+        "sd15": (
+            [e for e in MODEL_CATALOG if e.family == "sd15"],
+            4,
+        ),
+        "flux": (
+            [e for e in MODEL_CATALOG if e.family == "flux"],
+            4,
+        ),
+        "video": (
+            [e for e in MODEL_CATALOG if "video" in e.best_for or "animation" in e.style_tags
+             or e.family in ("svd", "animatediff", "mochi", "wan_video")],
+            3,
+        ),
+        "audio": (
+            [e for e in MODEL_CATALOG if "audio" in e.family],
+            1,
+        ),
+        "specialty": (
+            [e for e in MODEL_CATALOG if e.family in ("upscaler",)
+             or "inpaint" in e.best_for or "inpaint" in e.style_tags],
+            2,
+        ),
+    }
+    for bucket, (entries, min_count) in minimums.items():
+        assert len(entries) >= min_count, (
+            f"Bucket '{bucket}' has {len(entries)} entries; need >= {min_count}"
+        )
+
+
+def test_vram_consistency():
+    """vram_min_gb must be positive and <= vram_recommended_gb for all entries."""
+    for entry in MODEL_CATALOG:
+        assert entry.vram_min_gb > 0, f"{entry.id}: vram_min_gb must be > 0"
+        assert entry.vram_recommended_gb > 0, f"{entry.id}: vram_recommended_gb must be > 0"
+        assert entry.vram_min_gb <= entry.vram_recommended_gb, (
+            f"{entry.id}: vram_min_gb ({entry.vram_min_gb}) > vram_recommended_gb ({entry.vram_recommended_gb})"
+        )
+
+
+def test_download_command_format():
+    """Every entry must have a non-empty download_command."""
+    for entry in MODEL_CATALOG:
+        assert entry.download_command, f"{entry.id}: download_command must not be empty"
+
+
+def test_unique_ids():
+    ids = [e.id for e in MODEL_CATALOG]
+    assert len(ids) == len(set(ids)), f"Duplicate catalog IDs: {[id for id in ids if ids.count(id) > 1]}"
+
+
+def test_unique_filenames():
+    filenames = [e.filename for e in MODEL_CATALOG]
+    dupes = [fn for fn in filenames if filenames.count(fn) > 1]
+    # flux_hyper shares the flux1-dev filename (it's a LoRA on top); exclude that known case
+    dupes = [d for d in set(dupes) if d not in ("flux1-dev",)]
+    assert not dupes, f"Unexpected duplicate filenames: {dupes}"
+
+
+def test_pony_entries_have_score_tag_prefix():
+    """All Pony-family entries must have score-tag injection enabled."""
+    pony_entries = [e for e in MODEL_CATALOG if e.family == "pony"]
+    assert pony_entries, "No Pony entries found"
+    for entry in pony_entries:
+        assert entry.prompt_syntax.quality_prefix is not None, (
+            f"{entry.id}: Pony entry must have a score-tag quality_prefix"
+        )
+        assert "score_9" in entry.prompt_syntax.quality_prefix, (
+            f"{entry.id}: Pony quality_prefix must contain 'score_9'"
+        )
+
+
+def test_flux_entries_strip_emphasis_weights():
+    """All Flux-family entries must use emphasis_format='none'."""
+    flux_entries = [e for e in MODEL_CATALOG if e.family == "flux"]
+    assert flux_entries, "No Flux entries found"
+    for entry in flux_entries:
+        assert entry.prompt_syntax.emphasis_format == "none", (
+            f"{entry.id}: Flux entry must use emphasis_format='none' to strip (word:1.3) weights"
+        )

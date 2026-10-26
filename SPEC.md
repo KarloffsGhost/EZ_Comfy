@@ -19,8 +19,8 @@ EZ_Comfy figures out: *"You have an RTX 5070 Ti with 16GB VRAM. For cinematic ph
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                      FastAPI Server                       │
-│  /v1/ui  /v1/generate  /v1/status  /v1/hardware          │
-│  /v1/catalog  /v1/queue  /v1/compare                     │
+│  GET /  /v1/generate  /v1/health  /v1/inventory           │
+│  /v1/recommendations  /v1/queue  /v1/compare              │
 └────────────┬─────────────────────────────────────────────┘
              │
      ┌───────▼────────┐
@@ -1107,26 +1107,23 @@ Note: `enhance_prompt` now takes `model_family` so it can tailor enhancement to 
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `GET /v1/ui` | GET | Serves the web UI |
+| `GET /` | GET | Serves the web UI (inline HTML/JS) |
 | `GET /v1/health` | GET | ComfyUI reachability + GPU status |
-| `GET /v1/hardware` | GET | Return cached hardware profile |
 | `GET /v1/inventory` | GET | Return installed models/LoRAs/VAEs |
 | `POST /v1/inventory/refresh` | POST | Re-scan ComfyUI models |
-| `GET /v1/catalog` | GET | Return full model catalog with install status |
-| `GET /v1/catalog/recommend` | GET | Get model recommendations for a prompt |
+| `GET /v1/recommendations` | GET | Get model recommendations for a prompt |
 | `GET /v1/recipes` | GET | List available workflow recipes |
-| `GET /v1/styles` | GET | List available style presets |
-| `POST /v1/generate` | POST | Synchronous generation (small batch) |
-| `POST /v1/generate/start` | POST | Start async generation, return job_id |
-| `GET /v1/generate/status/{job_id}` | GET | Poll job status + progress events |
+| `POST /v1/generate` | POST | Synchronous generation (JSON body) |
+| `POST /v1/generate/form` | POST | Synchronous generation (multipart, supports image upload) |
 | `POST /v1/plan` | POST | Preview generation plan without executing |
+| `POST /v1/plan/workflow` | POST | Export ComfyUI workflow JSON (downloadable) |
 | `POST /v1/compare` | POST | A/B comparison generation |
-| `POST /v1/queue/add` | POST | Add to generation queue |
-| `GET /v1/queue` | GET | List queue entries |
-| `DELETE /v1/queue/{entry_id}` | DELETE | Cancel queued entry |
-| `GET /v1/history` | GET | Recent generation history with thumbnails |
-| `GET /v1/output/{filename}` | GET | Serve generated output file |
-| `WebSocket /v1/ws/{job_id}` | WS | Real-time progress streaming |
+| `POST /v1/queue` | POST | Enqueue generation for background processing |
+| `GET /v1/queue` | GET | List all queued/running/completed jobs |
+| `GET /v1/queue/{job_id}` | GET | Get job status and result |
+| `DELETE /v1/queue/{job_id}` | DELETE | Cancel a queued job |
+| `GET /v1/install/plan` | GET | What to install for a given prompt |
+| `GET /v1/history/{prompt_id}/provenance` | GET | Provenance record for a completed job |
 
 **WebSocket endpoint (`/v1/ws/{job_id}`):**
 Proxies ComfyUI's WebSocket progress events to the UI:
@@ -1140,7 +1137,7 @@ The `preview_b64` field contains the latent preview as an inline base64 data URI
 
 ---
 
-### 3.12 Web UI (`GET /v1/ui`)
+### 3.12 Web UI (`GET /`)
 
 **Inline HTML/JS single-page app** (same pattern as MultiModel's Visual Runner).
 
@@ -1408,10 +1405,10 @@ I:/EZ_Comfy/
 ### Phase 8: FastAPI Server + Endpoints
 **Files:** `api/server.py`, `api/routes.py`, `api/models.py`
 **Tests:** `test_api.py` (TestClient with mocked engine)
-**Milestone:** All REST + WebSocket endpoints functional. `/v1/catalog/recommend` returns model suggestions.
+**Milestone:** All REST + WebSocket endpoints functional. `/v1/recommendations` returns model suggestions.
 
 ### Phase 9: Web UI
-**Files:** Inline HTML/JS in `routes.py` (GET /v1/ui)
+**Files:** Inline HTML/JS in `routes.py` (GET /)
 **Tests:** Manual testing
 **Milestone:** Full UI with prompt input, model recommendations, style presets, plan preview, progress bar, output display, A/B comparison, queue panel, history.
 

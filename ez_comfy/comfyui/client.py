@@ -58,7 +58,14 @@ class ComfyUIClient:
         cid = client_id or str(uuid.uuid4())
         payload = {"prompt": workflow, "client_id": cid}
         resp = await self._http.post("/prompt", json=payload, timeout=30.0)
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            # Surface ComfyUI's validation details instead of a generic 400
+            try:
+                err_body = resp.json()
+            except Exception:
+                err_body = resp.text[:500]
+            logger.error("ComfyUI rejected workflow (HTTP %d): %s", resp.status_code, err_body)
+            resp.raise_for_status()
         data = resp.json()
         prompt_id = data.get("prompt_id")
         if not prompt_id:

@@ -13,6 +13,7 @@ class ComfyUIConfig(BaseModel):
     default_output_dir: str = "output"
     output_dir: str = "output"   # ComfyUI output directory (for sidecar metadata)
     timeout_seconds: int = 300
+    auto_detect: bool = True     # probe for running ComfyUI if base_url/model_base_path unset
 
 
 class OllamaConfig(BaseModel):

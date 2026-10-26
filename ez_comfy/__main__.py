@@ -29,14 +29,27 @@ def _load_settings(config: str | None) -> "Settings":
 # ---------------------------------------------------------------------------
 
 async def _cmd_check(args: argparse.Namespace) -> int:
+    from ez_comfy.comfyui.autodetect import detect_comfyui
     from ez_comfy.comfyui.client import ComfyUIClient
     from ez_comfy.hardware.comfyui_inventory import scan_inventory
     from ez_comfy.hardware.probe import probe_hardware
 
     settings = _load_settings(args.config)
-    client = ComfyUIClient(base_url=settings.comfyui.base_url)
 
-    print(f"Checking ComfyUI at {settings.comfyui.base_url} …")
+    if settings.comfyui.auto_detect:
+        detected = detect_comfyui(
+            explicit_url=settings.comfyui.base_url if settings.comfyui.base_url != "http://127.0.0.1:8188" else None,
+            explicit_model_path=settings.comfyui.model_base_path or None,
+        )
+        if detected.base_url:
+            settings.comfyui.base_url = detected.base_url
+        if detected.model_base_path and not settings.comfyui.model_base_path:
+            settings.comfyui.model_base_path = detected.model_base_path
+        print(f"Detected ComfyUI at {settings.comfyui.base_url} (source: {detected.source})")
+    else:
+        print(f"Checking ComfyUI at {settings.comfyui.base_url} …")
+
+    client = ComfyUIClient(base_url=settings.comfyui.base_url)
     ok = await client.health_check()
     if not ok:
         print("ERROR: ComfyUI is not reachable. Is it running?")
