@@ -1,29 +1,69 @@
 from __future__ import annotations
 
+import re
 
-def classify_checkpoint(filename: str, size_bytes: int | None = None) -> tuple[str, str | None]:
+# Version-like context keeps "wan"/"ltx" from matching words such as "swan" or "wanderer".
+# Names are matched on the lower-cased file name (folders included).
+_WAN = re.compile(r"(?<![a-z])wan(?:[-_.]?\d|[-_])")
+_LTX = re.compile(r"(?<![a-z])ltx(?:[-_.]?\d|[-_v])")
+_FLUX2 = re.compile(r"flux[-_.]?2(?!\d)")
+_FLUX3 = re.compile(r"flux[-_.]?3(?!\d)")
+_QWEN_IMAGE = re.compile(r"qwen[-_ ]?image")
+
+# Families the classifier can return, for validating `model_overrides`.
+KNOWN_FAMILIES = frozenset({
+    "sd15", "sdxl", "pony", "flux", "flux2", "flux3", "sd3", "cascade", "svd", "stable_audio",
+    "wan_video", "ltx_video", "qwen_image", "hidream", "unknown",
+})
+
+
+def classify_checkpoint(
+    filename: str,
+    size_bytes: int | None = None,
+    overrides: dict[str, str] | None = None,
+) -> tuple[str, str | None]:
     """
     Classify a checkpoint by filename patterns and optional file size.
     Returns (family, variant).
 
-    Families: sd15, sdxl, flux, sd3, cascade, svd, stable_audio, unknown
+    `overrides` maps an installed file name to a family and wins over every rule below.
+
+    Families: sd15, sdxl, pony, flux, flux2, flux3, sd3, cascade, svd, stable_audio,
+              wan_video, ltx_video, qwen_image, hidream, unknown
     Variants: lightning, turbo, lcm, hyper, schnell, None
     """
     lower = filename.lower()
 
     variant = _detect_variant(lower)
 
+    if overrides and filename in overrides:
+        return overrides[filename], variant
+
     # Audio models
     if any(k in lower for k in ("stable_audio", "stable-audio", "audio_open")):
         return "stable_audio", variant
 
-    # Video models
+    # Video models (before image families: their names can contain image-family words)
     if any(k in lower for k in ("svd", "stable-video", "stable_video")):
         return "svd", variant
+    if _WAN.search(lower):
+        return "wan_video", variant
+    if _LTX.search(lower):
+        return "ltx_video", variant
 
-    # Flux
+    # Flux generations: explicit tokens only; any other flux name stays the original family
     if "flux" in lower:
+        if _FLUX3.search(lower):
+            return "flux3", variant
+        if _FLUX2.search(lower):
+            return "flux2", variant
         return "flux", variant
+
+    # Other modern UNET-loaded image families
+    if "hidream" in lower:
+        return "hidream", variant
+    if _QWEN_IMAGE.search(lower):
+        return "qwen_image", variant
 
     # Stable Cascade
     if "cascade" in lower:

@@ -49,3 +49,9 @@ history:
   max_entries: 100
   save_metadata: true
   save_thumbnails: true
+
+# Name models the classifier cannot recognise. Use the file name exactly as `python -m ez_comfy check`
+# prints it (including any sub-folder). Families: sd15, sdxl, pony, flux, flux2, flux3, sd3, cascade,
+# svd, stable_audio, wan_video, ltx_video, qwen_image, hidream. Unknown names are rejected at startup.
+# model_overrides:
+#   "myMerge_v9.safetensors": sdxl

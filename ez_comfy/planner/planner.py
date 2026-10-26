@@ -6,7 +6,7 @@ from ez_comfy.hardware.probe import HardwareProfile
 from ez_comfy.hardware.comfyui_inventory import CHECKPOINT_LOADER, ComfyUIInventory
 from ez_comfy.models.catalog import (
     MODEL_CATALOG, ModelCatalogEntry, ModelRecommendation,
-    find_catalog_entry, recommend_models, resolve_installed_filename,
+    _intent_compatible_families, find_catalog_entry, recommend_models, resolve_installed_filename,
 )
 from ez_comfy.models.profiles import ModelProfile, PromptSyntax, get_profile, snap_to_bucket
 from ez_comfy.planner.intent import PipelineIntent, detect_intent
@@ -352,8 +352,15 @@ def _select_checkpoint(
 
     # No recommended model installed — use first available checkpoint
     if loadable:
-        # Prefer a model we can classify over an arbitrary first file.
-        ck = next((m for m in loadable if m.family != "unknown"), loadable[0])
+        # Prefer a model whose family suits this intent, then an unclassified one (it may suit),
+        # and only then a model known to be the wrong kind (a stable_audio or video checkpoint
+        # for an image prompt).
+        suitable = _intent_compatible_families(intent.value)
+        ck = (
+            next((m for m in loadable if m.family in suitable), None)
+            or next((m for m in loadable if m.family == "unknown"), None)
+            or loadable[0]
+        )
         warnings.append(
             f"No recommended model installed. Using {ck.filename!r}. "
             "Consider installing a model from the catalog."

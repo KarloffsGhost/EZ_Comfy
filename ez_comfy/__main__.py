@@ -76,7 +76,7 @@ async def _cmd_check(args: argparse.Namespace) -> int:
     print(f"Platform: {hw.platform}")
 
     print("\nScanning inventory …")
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
     print(f"Checkpoints : {len(inv.checkpoints)}")
     for c in inv.checkpoints[:10]:
         print(f"  • {c.filename}  [{c.family}]  {c.size_bytes / 1e9:.1f}GB")
@@ -86,6 +86,14 @@ async def _cmd_check(args: argparse.Namespace) -> int:
         print(f"Diffusion models (UNETLoader; listed, not yet selectable): {len(inv.diffusion_models)}")
         for m in inv.diffusion_models[:10]:
             print(f"  - {m.filename}  [{m.family}]")
+    unclassified = [m.filename for m in inv.all_models() if m.family == "unknown"]
+    if unclassified:
+        print(
+            f"Unclassified: {len(unclassified)} model(s) have no recognised family; set "
+            "`model_overrides: {file name: family}` in config/settings.yaml to name them:"
+        )
+        for name in unclassified[:10]:
+            print(f"  ? {name}")
     print(f"LoRAs       : {len(inv.loras)}")
     print(f"VAEs        : {len(inv.vaes)}")
     print(f"Upscalers   : {len(inv.upscale_models)}")
@@ -108,7 +116,7 @@ async def _cmd_plan(args: argparse.Namespace) -> int:
     settings = _load_settings(args.config)
     client = ComfyUIClient(base_url=settings.comfyui.base_url)
     hw = probe_hardware()
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
     await client.close()
 
     request = GenerationRequest(
@@ -152,7 +160,7 @@ async def _cmd_recommend(args: argparse.Namespace) -> int:
     settings = _load_settings(args.config)
     client = ComfyUIClient(base_url=settings.comfyui.base_url)
     hw = probe_hardware()
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
     await client.close()
 
     intent = args.intent or detect_intent(args.prompt, False, False).value
@@ -189,7 +197,7 @@ async def _cmd_generate(args: argparse.Namespace) -> int:
     settings = _load_settings(args.config)
     client = ComfyUIClient(base_url=settings.comfyui.base_url)
     hw = probe_hardware()
-    inv = await scan_inventory(client)
+    inv = await scan_inventory(client, overrides=settings.model_overrides)
 
     ref_bytes: bytes | None = None
     if args.reference:

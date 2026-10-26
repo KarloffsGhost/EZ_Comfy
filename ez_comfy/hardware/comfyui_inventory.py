@@ -89,8 +89,13 @@ class ComfyUIInventory:
         return [model for model in self.all_models() if model.loader == loader]
 
 
-async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
-    """Query ComfyUI API to build a full inventory of installed models and nodes."""
+async def scan_inventory(
+    client: ComfyUIClient, overrides: dict[str, str] | None = None
+) -> ComfyUIInventory:
+    """Query ComfyUI API to build a full inventory of installed models and nodes.
+
+    `overrides` maps an installed file name to a model family and wins over the classifier.
+    """
     inventory = ComfyUIInventory()
 
     # Discover all class_types from full /object_info dump
@@ -102,7 +107,7 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
         all_info = {}
 
     # Checkpoints
-    inventory.checkpoints = await _get_checkpoints(client, all_info)
+    inventory.checkpoints = await _get_checkpoints(client, all_info, overrides)
 
     # LoRAs
     inventory.loras = await _get_loras(client, all_info)
@@ -124,7 +129,7 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
     inventory.schedulers = _extract_list(all_info, "KSampler", "scheduler")
 
     # Files that only other loaders can load (Wan/Flux/Qwen-style diffusion models, CLIP vision, dual CLIP)
-    inventory.diffusion_models = _get_diffusion_models(all_info)
+    inventory.diffusion_models = _get_diffusion_models(all_info, overrides)
     inventory.clip_vision_models = _extract_list(all_info, "CLIPVisionLoader", "clip_name")
     inventory.dual_clip_models = _merge_unique(
         _extract_list(all_info, "DualCLIPLoader", "clip_name1"),
@@ -143,11 +148,13 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
     return inventory
 
 
-async def _get_checkpoints(client: ComfyUIClient, all_info: dict) -> list[ModelInfo]:
+async def _get_checkpoints(
+    client: ComfyUIClient, all_info: dict, overrides: dict[str, str] | None = None
+) -> list[ModelInfo]:
     names = _extract_list(all_info, "CheckpointLoaderSimple", "ckpt_name")
     results = []
     for name in names:
-        family, variant = classify_checkpoint(name)
+        family, variant = classify_checkpoint(name, overrides=overrides)
         results.append(ModelInfo(
             filename=name, size_bytes=0, family=family, variant=variant,
             loader=CHECKPOINT_LOADER, folder=_folder_of(name),
@@ -155,10 +162,10 @@ async def _get_checkpoints(client: ComfyUIClient, all_info: dict) -> list[ModelI
     return results
 
 
-def _get_diffusion_models(all_info: dict) -> list[ModelInfo]:
+def _get_diffusion_models(all_info: dict, overrides: dict[str, str] | None = None) -> list[ModelInfo]:
     results = []
     for name in _extract_list(all_info, "UNETLoader", "unet_name"):
-        family, variant = classify_checkpoint(name)
+        family, variant = classify_checkpoint(name, overrides=overrides)
         results.append(ModelInfo(
             filename=name, size_bytes=0, family=family, variant=variant,
             loader=DIFFUSION_MODEL_LOADER, folder=_folder_of(name),

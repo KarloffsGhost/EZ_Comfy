@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ComfyUIConfig(BaseModel):
@@ -45,10 +45,25 @@ class HistoryConfig(BaseModel):
 
 class Settings(BaseModel):
     comfyui: ComfyUIConfig = Field(default_factory=ComfyUIConfig)
+    # Installed file name (exactly as `check` prints it) -> model family. Wins over the
+    # filename classifier; use it for models the classifier reports as "unknown".
+    model_overrides: dict[str, str] = Field(default_factory=dict)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     preferences: PreferencesConfig = Field(default_factory=PreferencesConfig)
     history: HistoryConfig = Field(default_factory=HistoryConfig)
+
+    @field_validator("model_overrides")
+    @classmethod
+    def _families_must_be_known(cls, overrides: dict[str, str]) -> dict[str, str]:
+        from ez_comfy.models.classifier import KNOWN_FAMILIES
+
+        bad = {name: family for name, family in overrides.items() if family not in KNOWN_FAMILIES}
+        if bad:
+            raise ValueError(
+                f"model_overrides has unknown families {bad}; choose from {sorted(KNOWN_FAMILIES)}"
+            )
+        return overrides
 
 
 _DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "settings.yaml"

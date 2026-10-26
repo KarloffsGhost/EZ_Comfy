@@ -52,3 +52,12 @@ def test_snap_to_bucket_sdxl(w, h, expected_w, expected_h):
     assert sw == expected_w and sh == expected_h, (
         f"snap_to_bucket({w},{h}) = ({sw},{sh}), expected ({expected_w},{expected_h})"
     )
+
+
+@pytest.mark.parametrize("family", ["wan_video", "ltx_video", "qwen_image", "hidream", "flux2"])
+def test_modern_family_profiles_are_complete(family):
+    profile = get_profile(family)
+    assert profile.family == family, "must not fall back to the unknown profile"
+    assert profile.resolution_buckets and profile.native_resolution in profile.resolution_buckets
+    assert profile.vram_requirement_gb > 0
+    assert profile.default_settings.steps > 0

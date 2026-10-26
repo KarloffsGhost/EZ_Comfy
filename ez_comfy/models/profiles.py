@@ -232,6 +232,89 @@ PROFILES: dict[str, ModelProfile] = {
         ),
         supports_controlnet=False,
     ),
+    # --- Modern families (WI-3) -------------------------------------------------------------
+    # Source for every value below: the workflow templates shipped with ComfyUI Desktop 1.1.8
+    # (comfyui_workflow_templates_json 0.1.122, ComfyUI 0.42.0), read 2026-10-25; the file the
+    # value came from is named per family. Sizes are the official Hugging Face file sizes of the
+    # template's diffusion model (GiB, from the template's own download URL). That is a lower
+    # bound (weights only, no activations or text encoder), not a measured peak; WI-5 measures.
+    # `scheduler` names the node the template uses when it is not a KSampler scheduler name.
+    # These families are classified and described but not selectable for generation until
+    # WI-5/WI-6 add recipes for them.
+    "wan_video": ModelProfile(
+        # video_wan2_2_14B_t2v.json: EmptyHunyuanLatentVideo 640x640x81, KSamplerAdvanced
+        # 4 steps / cfg 1 / euler / simple *with the lightx2v 4-step LoRAs the template loads*
+        # (without them it needs more steps). Other attested sizes: 832x480 (text_to_video_wan),
+        # 1280x704 (video_wan2_2_5B_ti2v), 512x512 (image_to_video_wan).
+        # wan2.2_t2v_*_14B_fp8_scaled.safetensors: 13.31 GiB.
+        family="wan_video",
+        native_resolution=(640, 640),
+        resolution_buckets=[(640, 640), (832, 480), (1280, 704), (512, 512)],
+        vram_requirement_gb=13.4,
+        default_settings=ModelSettings(steps=4, cfg=1.0, sampler="euler", scheduler="simple"),
+        prompt_syntax=_SYNTAX_FLUX,
+        supports_img2img=False,
+        supports_inpaint=False,
+        supports_controlnet=False,
+        clip_type="umt5_xxl",
+        vae_type="wan",
+    ),
+    "ltx_video": ModelProfile(
+        # video_ltx2_3_t2v.json: EmptyLTXVLatentVideo 768x512x97, euler, CFGGuider cfg 1,
+        # ManualSigmas "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+        # (8 steps) plus the distilled LoRA at 0.5. ltx-2.3-22b-dev-fp8.safetensors: 27.14 GiB.
+        family="ltx_video",
+        native_resolution=(768, 512),
+        resolution_buckets=[(768, 512)],
+        vram_requirement_gb=27.2,
+        default_settings=ModelSettings(steps=8, cfg=1.0, sampler="euler", scheduler="ManualSigmas"),
+        prompt_syntax=_SYNTAX_FLUX,
+        supports_img2img=False,
+        supports_inpaint=False,
+        supports_controlnet=False,
+        clip_type="gemma3_12b",
+    ),
+    "qwen_image": ModelProfile(
+        # image_qwen_image_2_1_t2i.json: EmptyLatentImage 1024x1024, KSampler 25 steps / cfg 1 /
+        # euler / simple. image_qwen_image.json also attests 1328x1328.
+        # qwen_image_2.1_int8_convrot.safetensors: 6.76 GiB (qwen_image_fp8_e4m3fn: 19.03 GiB).
+        family="qwen_image",
+        native_resolution=(1024, 1024),
+        resolution_buckets=[(1024, 1024), (1328, 1328)],
+        vram_requirement_gb=6.8,
+        default_settings=ModelSettings(steps=25, cfg=1.0, sampler="euler", scheduler="simple"),
+        prompt_syntax=_SYNTAX_FLUX,
+        supports_controlnet=False,
+        clip_type="qwen_vl",
+    ),
+    "hidream": ModelProfile(
+        # hidream_i1_dev.json: EmptySD3LatentImage 1024x1024, KSampler 28 steps / cfg 1 / lcm /
+        # normal, ModelSamplingSD3 shift 6. hidream_i1_dev_fp8.safetensors: 15.93 GiB.
+        family="hidream",
+        native_resolution=(1024, 1024),
+        resolution_buckets=[(1024, 1024)],
+        vram_requirement_gb=16.0,
+        default_settings=ModelSettings(steps=28, cfg=1.0, sampler="lcm", scheduler="normal"),
+        prompt_syntax=_SYNTAX_FLUX,
+        supports_controlnet=False,
+        clip_type="clip_l+clip_g+t5xxl+llama",
+    ),
+    "flux2": ModelProfile(
+        # image_flux2_text_to_image.json: EmptyFlux2LatentImage 1024x1024, Flux2Scheduler 20
+        # steps, FluxGuidance 4 (the guidance value lives in that node, not in cfg), euler via
+        # SamplerCustomAdvanced. flux2_dev_fp8mixed.safetensors: 33.02 GiB.
+        # FLUX.3 names classify as "flux3" but have no profile yet: the FLUX.3 weights are
+        # gated, so their size could not be confirmed.
+        family="flux2",
+        native_resolution=(1024, 1024),
+        resolution_buckets=[(1024, 1024)],
+        vram_requirement_gb=33.1,
+        default_settings=ModelSettings(steps=20, cfg=1.0, sampler="euler", scheduler="Flux2Scheduler"),
+        prompt_syntax=_SYNTAX_FLUX,
+        supports_controlnet=False,
+        clip_type="mistral",
+        vae_type="flux2",
+    ),
     "stable_audio": ModelProfile(
         family="stable_audio",
         native_resolution=(0, 0),

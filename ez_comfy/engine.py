@@ -98,7 +98,7 @@ class GenerationEngine:
 
     async def refresh_inventory(self) -> ComfyUIInventory:
         """Re-scan ComfyUI for installed models and capabilities."""
-        self._inventory = await scan_inventory(self._client)
+        self._inventory = await scan_inventory(self._client, overrides=self._settings.model_overrides)
         logger.info(
             "Inventory refreshed: %d checkpoints, %d LoRAs, %d capabilities detected",
             len(self._inventory.checkpoints),

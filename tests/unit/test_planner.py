@@ -345,11 +345,19 @@ def test_only_diffusion_models_installed_raises_instead_of_using_one():
         plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([], [wan]))
 
 
-def test_planner_fallback_prefers_known_family():
+def test_planner_fallback_prefers_a_family_that_suits_the_intent():
     unknown = ModelInfo("mystery_model.safetensors", 0, "unknown")
     known = ModelInfo("totally_custom_name.safetensors", 0, "sd15")
     plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([unknown, known]))
     assert plan.checkpoint == "totally_custom_name.safetensors"
+
+
+def test_planner_fallback_skips_audio_and_video_families_for_an_image_prompt():
+    audio = ModelInfo("some_audio_model.safetensors", 0, "stable_audio")
+    video = ModelInfo("some_video_model.safetensors", 0, "ltx_video")
+    unknown = ModelInfo("mystery_model.safetensors", 0, "unknown")
+    plan = plan_generation(_make_request(prompt="a dragon"), _make_hardware(), _inventory_with([audio, video, unknown]))
+    assert plan.checkpoint == "mystery_model.safetensors"
 
 
 def test_planner_fallback_uses_first_when_all_unknown():

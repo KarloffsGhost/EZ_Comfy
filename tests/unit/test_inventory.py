@@ -199,3 +199,42 @@ def test_inventory_response_includes_new_optional_fields_and_keeps_old_ones():
     assert response.diffusion_models == ["wan.safetensors"]
     assert response.clip_vision_models == ["cv.safetensors"] and response.dual_clip_models == ["d.safetensors"]
     assert [c["filename"] for c in response.checkpoints] == ["a.safetensors"]
+
+
+async def test_overrides_plumbed_through_scan():
+    info = _multi_loader_info(lambda o: [o, {}])
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append("someMergeV9.safetensors")
+    overrides = {
+        "someMergeV9.safetensors": "sdxl",
+        _WAN_FILES[0]: "flux",          # diffusion models honour overrides too
+    }
+    inv = await scan_inventory(_FakeClient(info), overrides=overrides)
+    by_name = {m.filename: m.family for m in inv.all_models()}
+    assert by_name["someMergeV9.safetensors"] == "sdxl"
+    assert by_name[_WAN_FILES[0]] == "flux"
+    assert by_name[_WAN_FILES[1]] == "wan_video"          # not overridden
+
+
+async def test_without_overrides_the_merge_stays_unknown():
+    info = _multi_loader_info(lambda o: [o, {}])
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append("someMergeV9.safetensors")
+    inv = await scan_inventory(_FakeClient(info))
+    assert {m.filename: m.family for m in inv.checkpoints}["someMergeV9.safetensors"] == "unknown"
+
+
+def test_settings_accept_known_override_families_and_default_to_empty():
+    from ez_comfy.config.schema import Settings
+
+    assert Settings().model_overrides == {}
+    assert Settings.model_validate({"model_overrides": {"a.safetensors": "sdxl"}}).model_overrides == {
+        "a.safetensors": "sdxl"
+    }
+
+
+def test_settings_reject_a_misspelled_override_family():
+    import pydantic
+
+    from ez_comfy.config.schema import Settings
+
+    with pytest.raises(pydantic.ValidationError, match="unknown families"):
+        Settings.model_validate({"model_overrides": {"a.safetensors": "sdxll"}})

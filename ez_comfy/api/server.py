@@ -30,7 +30,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Scanning ComfyUI inventory at %s …", settings.comfyui.base_url)
     try:
-        inventory = await scan_inventory(client)
+        inventory = await scan_inventory(client, overrides=settings.model_overrides)
         logger.info(
             "Inventory: %d checkpoints, %d LoRAs, capabilities=%s",
             len(inventory.checkpoints),

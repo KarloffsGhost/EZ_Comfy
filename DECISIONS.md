@@ -2,6 +2,17 @@
 
 Non-obvious choices, newest first. Each entry: date, decision, why.
 
+## 2026-10-25 — Classifier: modern families and `model_overrides` (WI-3)
+
+**V7 resolved.** The templates ComfyUI Desktop 1.1.8 ships locally (`comfyui_workflow_templates_json` 0.1.122, under the install's `.venv`) include Wan 2.1/2.2, LTX 2/2.3/2.5, Qwen-Image 1/2.1, HiDream, Flux 1/2/3, Krea. File names in the new classifier tests and every profile value come from them; the files and sizes are cited in `profiles.py`.
+
+- **Families added:** `wan_video`, `ltx_video`, `qwen_image`, `hidream`, `flux2`, `flux3`. Tokens: `wan` and `ltx` need a version-like context and a non-letter before them (so `swan2`, `wanderer`, `multx` stay unknown); video families are checked before image families; `qwen` needs `image` after it, so Qwen *text encoders* are not image models. Previously unrecognised `flux1-*` names keep the `flux` family (D2: explicit tokens only, else the single family).
+- **Profiles for five of the six.** `flux3` is classification-only: its weights are gated on Hugging Face (HTTP 401), so the file size could not be confirmed, and a guessed profile would be worse than none. All profiles state in comments that `vram_requirement_gb` is the official weight-file size in GiB (a lower bound, not a measured peak; WI-5 measures) and that settings that depend on LoRAs or custom samplers (Wan 4-step, LTX manual sigmas, Flux2 scheduler) are named after the template's node. None of these families is selectable for generation until WI-5/6.
+- **D1 resolved as (b): no SDXL allow-list.** The only candidate was a popular merge whose newer releases are no longer SDXL-based, so a name-only rule would misclassify them. It stays `unknown`; `check` now lists unclassified models and names `model_overrides`.
+- **`model_overrides`** (`Settings.model_overrides`, file name -> family): wins over every classifier rule, reaches checkpoints and diffusion models through `scan_inventory(client, overrides=...)`, and is handed over by the server lifespan, the engine's refresh and the CLI commands. Matching is by the exact name ComfyUI reports. A misspelled family fails at startup with the allowed list rather than being ignored.
+- **Fix to WI-2's fallback.** "Prefer a known family" would have chosen `stable_audio` or the now-classified `ltx_video` checkpoint for an image prompt. The fallback now prefers a family compatible with the intent, then an unclassified file, then the first.
+- Not done: LoRA family inference (spec non-goal); the Wan/LTX/Qwen/Flux3 catalog entries (WI-7b).
+
 ## 2026-10-25 — Multi-loader scanning and the loader guard (WI-2, rest)
 
 - **Verified live:** `check` lists 6 `UNETLoader` files (four Wan 2.2 14B files plus two `xl-inpaint-0.1\diffusion_pytorch_model*` files) under diffusion models; checkpoints stay at 7. The Wan files classify as `unknown` until WI-3.
