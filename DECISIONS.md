@@ -2,6 +2,15 @@
 
 Non-obvious choices, newest first. Each entry: date, decision, why.
 
+## 2026-10-25 — Config diagnostics, version tracking, fixture capture (WI-1)
+
+- **Warn, don't override.** `check` warns when an explicit `model_base_path` is missing and suggests ComfyUI Desktop's current folder (live: `G:/Documents/ComfyUI/models` missing, suggests `J:\Documents\ComfyUI\models`). `detect_comfyui` keeps its explicit-input semantics, so the existing tests are unchanged.
+- **config.json is derived from the yaml's folder**, not read from `%APPDATA%` directly, so tests that patch the yaml path stay hermetic and never read the maintainer's real config.
+- **`TESTED_COMFYUI_RANGE` is exactly `0.42.0 - 0.42.0`.** Only 0.42.0 has been verified; a later patch release warns until the range is widened with a COMPAT.md row. Chosen over a `0.42.x` claim we have not tested.
+- **`pyproject.toml` stays at 0.1.0** until WI-2 and WI-3 merge (spec 1.4.5). `__version__` falls back to `0.0.0+unknown` when the package is not installed.
+- **Fixture capture is allow-list based** (unknown fields are dropped, not redacted) and stages outside `tests/`. No fixtures are committed yet: the capture was run against the live server into a scratch folder for review; nothing in it matched `Users`, drive letters, user name or host name. Open: the maintainer chooses which model file names to keep.
+- Observed, not fixed: `check` prints `0.0GB` for every checkpoint (the size is not populated).
+
 ## 2026-10-24 — Client hardening: frames, completion, cancel (WI-4)
 
 **Live checks (V3, V4) on ComfyUI 0.42.0**, tiny SD1.5 jobs (512x512, `PreviewImage` so nothing landed in `output/`), GPU at 0-8% beforehand:
