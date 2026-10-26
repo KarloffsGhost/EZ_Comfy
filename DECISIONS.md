@@ -2,6 +2,21 @@
 
 Non-obvious choices, newest first. Each entry: date, decision, why.
 
+## 2026-10-25 — Wan 2.2 text-to-video recipe (WI-5, part 1: planning, builder, outputs)
+
+**Not yet run on the GPU.** The recipe is verified against the shipped template graph and by unit tests only; the first real render (and measured VRAM/time) is the next step and updates this entry.
+
+- **Golden graph.** `scripts/export_template_graph.py` flattens the shipped `video_wan2_2_14B_t2v.json` (a subgraph with a boolean "fast LoRA" switch) into API format by folding the primitive, switch and math helper nodes, using the live `/object_info` for widget order. The result, `tests/fixtures/workflows/wan22_t2v.api.json`, has 14 nodes and contains only public template file names and `PROMPT`/`NEGATIVE` placeholders. The builder is compared to it with `tests/golden.py`.
+- **Template default = plain mode, not the LoRA mode.** With the switch off the template runs one 20-step pass split at step 10 (high-noise expert 0-10, low-noise expert 10-20), cfg 3.5, shift 5, 16 fps, 81 frames, no extra LoRAs. That is what the builder and the `wan_video` profile now use (the earlier WI-3 profile had the 4-step LoRA numbers). The installed lightx2v 4-step LoRAs would make it about five times fewer steps; that is a follow-up variant, not wired.
+- **Normalized comparison.** Nodes are matched by a structural key (what feeds them and how their output is consumed), floats compare to 6 decimals (the template stores 5.0 as `5.000000000000001`; the first comparison failed on exactly that), and seeds/titles/prefixes are ignored. Structure cannot distinguish positive from negative prompt, so the golden test plans with the placeholder prompts and compares text too; a self-test pins that limitation.
+- **Multi-file plan.** `GenerationPlan.models` maps roles (`diffusion_high`, `diffusion_low`, `text_encoder`, `vae`) to files; `checkpoint` stays the high-noise file for display. `Recipe.families` and `select_recipe(..., family=)` reject recipes for the wrong family: a legacy recipe (no families) can never run a modern family, and the Wan recipe is never used with another family. SVD is still chosen with a reference image and rejected, with a recorded reason, otherwise.
+- **All four roles are required.** If the pair, encoder or VAE is missing, Wan is not used; a warning names what is missing when some Wan t2v files exist. i2v files are never taken for the t2v pair.
+- **Frames and fps.** `GenerationRequest.video_frames/video_fps` were declared but unused (default 25/8) and are now `None` = family default (81 at 16 fps for Wan). Wan length must be 1 + 4n (the latent node's step is 4, read from live `/object_info`), so a request is snapped to the nearest valid value (ties up) with a warning. SVD ignores both, as before.
+- **Prompt group.** Modern natural-language families (`wan_video`, `ltx_video`, `qwen_image`, `hidream`, `flux2`, `flux3`) now share the `flux` style group so SDXL-style domain packs are not injected into video prompts.
+- **Default negative prompt** for Wan is the template's own (Chinese) text, stored as `_NEG_WAN` with its source cited.
+- **Outputs.** `extract_outputs` marks an `images` entry as video when its `animated` flag is true (bool or one-element list). Still images, audio and `gifs` are unchanged. Not yet verified against a recorded real history entry.
+- **Open before this is done:** the live render and measured numbers; the 300 s default timeout is almost certainly too short for a cold 14B load; the planner's 120 s video time estimate is a placeholder; catalog entries and `_intent_compatible_families` for video are untouched (WI-7b).
+
 ## 2026-10-25 — Classifier: modern families and `model_overrides` (WI-3)
 
 **V7 resolved.** The templates ComfyUI Desktop 1.1.8 ships locally (`comfyui_workflow_templates_json` 0.1.122, under the install's `.venv`) include Wan 2.1/2.2, LTX 2/2.3/2.5, Qwen-Image 1/2.1, HiDream, Flux 1/2/3, Krea. File names in the new classifier tests and every profile value come from them; the files and sizes are cited in `profiles.py`.

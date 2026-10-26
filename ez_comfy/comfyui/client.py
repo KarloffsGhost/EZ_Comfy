@@ -404,7 +404,10 @@ class ComfyUIClient:
         outputs = []
         for node_id, node_output in history_entry.get("outputs", {}).items():
             for img in node_output.get("images", []):
-                outputs.append({**img, "media_type": "image"})
+                # SaveVideo/PreviewVideo list their files under "images" with animated=true.
+                animated = img.get("animated")
+                is_video = animated[0] if isinstance(animated, list) and animated else animated
+                outputs.append({**img, "media_type": "video" if is_video is True else "image"})
             for audio in node_output.get("audio", []):
                 outputs.append({**audio, "media_type": "audio"})
             for video in node_output.get("gifs", []):

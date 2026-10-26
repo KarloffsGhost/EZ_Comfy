@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ez_comfy.hardware.probe import HardwareProfile
-from ez_comfy.hardware.comfyui_inventory import CHECKPOINT_LOADER, ComfyUIInventory
+from ez_comfy.hardware.comfyui_inventory import CHECKPOINT_LOADER, DIFFUSION_MODEL_LOADER, ComfyUIInventory
 from ez_comfy.models.catalog import (
     MODEL_CATALOG, ModelCatalogEntry, ModelRecommendation,
     _intent_compatible_families, find_catalog_entry, recommend_models, resolve_installed_filename,
@@ -38,8 +38,8 @@ class GenerationRequest:
     batch_size: int = 1
     denoise_strength: float = 0.7
     upscale_factor: int = 4
-    video_frames: int = 25
-    video_fps: int = 8
+    video_frames: int | None = None   # None = the model family's default
+    video_fps: int | None = None
     audio_duration: float = 5.0
     output_dir: str = "output"
     enhance_prompt: bool = False
@@ -71,6 +71,11 @@ class GenerationPlan:
     missing_capabilities: list[str]
     param_sources: dict[str, str]
     provenance: ProvenanceRecord = field(default_factory=ProvenanceRecord)
+    # Role -> file for multi-file models (diffusion_high, diffusion_low, text_encoder, vae).
+    # `checkpoint` keeps its meaning for single-checkpoint recipes.
+    models: dict[str, str] = field(default_factory=dict)
+    video_frames: int | None = None
+    video_fps: int | None = None
 
     def summary(self) -> dict:
         return {
@@ -91,6 +96,7 @@ class GenerationPlan:
             "missing_capabilities": self.missing_capabilities,
             "param_sources": self.param_sources,
             "provenance": self.provenance.to_dict(),
+            "models": dict(self.models),
         }
 
 
@@ -124,42 +130,62 @@ def plan_generation(
         ),
     ))
 
-    # 2. Get model recommendations
-    recommendations = recommend_models(
-        prompt=request.prompt,
-        intent=intent.value,
-        hardware=hardware,
-        inventory=inventory,
-        prefer_speed=prefer_speed,
-        top_n=8,
-        runnable_only=True,
-    )
+    # 2-4. Pick the model(s). Text-to-video with the Wan 2.2 pair takes a multi-file path; every
+    # other plan picks one checkpoint as before.
+    wan_models = None
+    if intent == PipelineIntent.VIDEO and request.reference_image is None and not request.checkpoint_override:
+        wan_models = _select_wan_t2v_models(inventory, warnings)
 
-    # 3. Select checkpoint
-    checkpoint, catalog_entry, checkpoint_decisions = _select_checkpoint(
-        request, intent, recommendations, inventory, warnings, hardware
-    )
-    for d in checkpoint_decisions:
-        provenance.add(d)
-
-    # 4. Resolve model profile
-    if catalog_entry:
-        family = catalog_entry.effective_family
-        profile = get_profile(catalog_entry.family, catalog_entry.variant)
+    models: dict[str, str] = {}
+    chosen_loader = CHECKPOINT_LOADER
+    if wan_models:
+        recommendations = []
+        models = wan_models
+        chosen_loader = DIFFUSION_MODEL_LOADER
+        checkpoint = wan_models["diffusion_high"]
+        catalog_entry = None
+        family = "wan_video"
+        profile = get_profile(family)
+        provenance.add(Decision(
+            parameter="models",
+            chosen_value=", ".join(f"{role}={name}" for role, name in models.items()),
+            source="inventory",
+            reason="Wan 2.2 text-to-video needs the high-noise and low-noise pair plus the umt5 text encoder and Wan VAE; all are installed",
+        ))
     else:
-        from ez_comfy.models.classifier import classify_checkpoint
-        family, variant = classify_checkpoint(checkpoint)
-        profile = get_profile(family, variant)
-        if variant:
-            family = f"{family}_{variant}" if f"{family}_{variant}" != family else family
+        recommendations = recommend_models(
+            prompt=request.prompt,
+            intent=intent.value,
+            hardware=hardware,
+            inventory=inventory,
+            prefer_speed=prefer_speed,
+            top_n=8,
+            runnable_only=True,
+        )
+
+        checkpoint, catalog_entry, checkpoint_decisions = _select_checkpoint(
+            request, intent, recommendations, inventory, warnings, hardware
+        )
+        for d in checkpoint_decisions:
+            provenance.add(d)
+
+        if catalog_entry:
+            family = catalog_entry.effective_family
+            profile = get_profile(catalog_entry.family, catalog_entry.variant)
+        else:
+            from ez_comfy.models.classifier import classify_checkpoint
+            family, variant = classify_checkpoint(checkpoint)
+            profile = get_profile(family, variant)
+            if variant:
+                family = f"{family}_{variant}" if f"{family}_{variant}" != family else family
 
     # 5. Select workflow recipe
-    recipe, missing_caps, recipe_decision = _select_recipe(request, intent, inventory, warnings)
+    recipe, missing_caps, recipe_decision = _select_recipe(request, intent, inventory, warnings, family)
     provenance.add(recipe_decision)
-    if recipe.model_loader != CHECKPOINT_LOADER:
+    if recipe.model_loader != chosen_loader:
         warnings.append(
-            f"Recipe '{recipe.name}' needs a {recipe.model_loader!r} model but the planner only "
-            "selects checkpoint-loader files today; generation may fail."
+            f"Recipe '{recipe.name}' needs a {recipe.model_loader!r} model but the planner selected a "
+            f"{chosen_loader!r} model; generation may fail."
         )
 
     # 6. Adapt prompt
@@ -204,6 +230,8 @@ def plan_generation(
         user_overrides=user_overrides,
         aspect_ratio=request.aspect_ratio,
     )
+
+    video_frames, video_fps = _resolve_video_dims(request, family, warnings)
 
     # Emit parameter decisions
     model_name = catalog_entry.name if catalog_entry else checkpoint
@@ -255,6 +283,9 @@ def plan_generation(
         missing_capabilities=missing_caps,
         param_sources=params.sources,
         provenance=provenance,
+        models=models,
+        video_frames=video_frames,
+        video_fps=video_fps,
     )
 
 
@@ -392,6 +423,7 @@ def _select_recipe(
     intent: PipelineIntent,
     inventory: ComfyUIInventory,
     warnings: list[str],
+    family: str | None = None,
 ) -> tuple[Recipe, list[str], Decision]:
     """Select recipe, tracking missing capabilities. Returns (recipe, missing_caps, decision)."""
     from ez_comfy.hardware.comfyui_inventory import has_capability
@@ -403,6 +435,7 @@ def _select_recipe(
         has_mask=request.mask_image is not None,
         discovered_class_types=inventory.discovered_class_types,
         recipe_override=request.recipe_override,
+        family=family,
     )
 
     # Check which capabilities of chosen recipe are missing
@@ -495,6 +528,57 @@ def _emit_param_decisions(
     ))
 
     _emit("seed", "seed", params.seed)
+
+
+# Wan 2.2 14B text-to-video file roles. Names follow the template's files
+# (wan2.2_t2v_{high,low}_noise_14B_*.safetensors, umt5_xxl_*, wan_2.1_vae.safetensors).
+_WAN_FRAME_STEP = 4          # EmptyHunyuanLatentVideo.length: min 1, step 4 (live /object_info, ComfyUI 0.42.0)
+_WAN_DEFAULT_FRAMES = 81     # template: floor(5 s * 16 fps) + 1
+_WAN_DEFAULT_FPS = 16
+
+
+def _select_wan_t2v_models(inventory: ComfyUIInventory, warnings: list[str]) -> dict[str, str] | None:
+    """Return the Wan 2.2 t2v file roles when the complete set is installed, else None.
+
+    When some Wan t2v files exist but the set is incomplete, say what is missing so the user can
+    fix it instead of silently getting another model.
+    """
+    wan_files = [m.filename for m in inventory.models_for_loader(DIFFUSION_MODEL_LOADER) if m.family == "wan_video"]
+
+    def pick(files: list[str], *tokens: str) -> str | None:
+        matches = sorted(f for f in files if all(t in f.lower() for t in tokens))
+        return matches[0] if matches else None
+
+    high = pick(wan_files, "t2v", "high_noise", "14b")
+    low = pick(wan_files, "t2v", "low_noise", "14b")
+    encoder = pick(inventory.clip_models, "umt5")
+    vae = pick(inventory.vaes, "wan_2.1_vae") or pick(inventory.vaes, "wan", "vae")
+
+    roles = {"diffusion_high": high, "diffusion_low": low, "text_encoder": encoder, "vae": vae}
+    missing = [role for role, name in roles.items() if not name]
+    if not missing:
+        return {role: name for role, name in roles.items() if name}
+    if high or low:
+        warnings.append(
+            f"Wan 2.2 text-to-video is incomplete (missing: {', '.join(missing)}); not using Wan."
+        )
+    return None
+
+
+def _resolve_video_dims(
+    request: GenerationRequest, family: str, warnings: list[str]
+) -> tuple[int | None, int | None]:
+    """Frame count and fps for families that carry them; (None, None) for the rest."""
+    if family != "wan_video":
+        return None, None
+    fps = request.video_fps or _WAN_DEFAULT_FPS
+    frames = request.video_frames or _WAN_DEFAULT_FRAMES
+    snapped = 1 + _WAN_FRAME_STEP * max(0, int((frames - 1) / _WAN_FRAME_STEP + 0.5))   # nearest, ties up
+    if snapped != frames:
+        warnings.append(
+            f"Wan video length must be 1 plus a multiple of {_WAN_FRAME_STEP} frames; using {snapped} instead of {frames}."
+        )
+    return snapped, fps
 
 
 def _estimate_vram(

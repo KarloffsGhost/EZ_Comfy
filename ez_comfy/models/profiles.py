@@ -115,6 +115,16 @@ _SYNTAX_FLUX = PromptSyntax(
     negative_required=False,
     default_negative="",
 )
+# Default negative prompt of the Wan 2.2 14B text-to-video template (node "CLIPTextEncode" in
+# video_wan2_2_14B_t2v.json, comfyui_workflow_templates_json 0.1.122). Chinese, as shipped.
+_NEG_WAN = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走，裸露，NSFW"
+_SYNTAX_WAN = PromptSyntax(
+    emphasis_format="none",
+    quality_prefix=None,
+    quality_suffix=None,
+    negative_required=True,
+    default_negative=_NEG_WAN,
+)
 _SYNTAX_PONY = PromptSyntax(
     emphasis_format="weighted",
     quality_prefix="score_9, score_8_up, score_7_up, ",
@@ -242,17 +252,19 @@ PROFILES: dict[str, ModelProfile] = {
     # These families are classified and described but not selectable for generation until
     # WI-5/WI-6 add recipes for them.
     "wan_video": ModelProfile(
-        # video_wan2_2_14B_t2v.json: EmptyHunyuanLatentVideo 640x640x81, KSamplerAdvanced
-        # 4 steps / cfg 1 / euler / simple *with the lightx2v 4-step LoRAs the template loads*
-        # (without them it needs more steps). Other attested sizes: 832x480 (text_to_video_wan),
-        # 1280x704 (video_wan2_2_5B_ti2v), 512x512 (image_to_video_wan).
-        # wan2.2_t2v_*_14B_fp8_scaled.safetensors: 13.31 GiB.
+        # video_wan2_2_14B_t2v.json, template default (the "fast LoRA" switch off):
+        # EmptyHunyuanLatentVideo 640x640x81, two KSamplerAdvanced passes of one 20-step run
+        # (high-noise expert steps 0-10, low-noise expert 10-20), cfg 3.5, euler / simple,
+        # ModelSamplingSD3 shift 5, CreateVideo 16 fps. With the switch on the template instead
+        # uses 4 steps / cfg 1 plus the lightx2v 4-step LoRAs (not wired yet).
+        # Other attested sizes: 832x480 (text_to_video_wan), 1280x704 (video_wan2_2_5B_ti2v),
+        # 512x512 (image_to_video_wan). wan2.2_t2v_*_14B_fp8_scaled.safetensors: 13.31 GiB.
         family="wan_video",
         native_resolution=(640, 640),
         resolution_buckets=[(640, 640), (832, 480), (1280, 704), (512, 512)],
         vram_requirement_gb=13.4,
-        default_settings=ModelSettings(steps=4, cfg=1.0, sampler="euler", scheduler="simple"),
-        prompt_syntax=_SYNTAX_FLUX,
+        default_settings=ModelSettings(steps=20, cfg=3.5, sampler="euler", scheduler="simple"),
+        prompt_syntax=_SYNTAX_WAN,
         supports_img2img=False,
         supports_inpaint=False,
         supports_controlnet=False,
