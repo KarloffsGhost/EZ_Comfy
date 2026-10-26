@@ -252,6 +252,12 @@ class GenerationEngine:
             outputs = self._client.extract_outputs(history_entry)
             logger.info("Generation done in %.1fs — %d outputs", duration, len(outputs))
 
+            # 7. Write provenance sidecar (best-effort; never fails the generation)
+            try:
+                await self._write_sidecar(plan, prompt_id, outputs, duration)
+            except Exception as exc:
+                logger.warning("Failed to write provenance sidecar: %s", exc)
+
             return GenerationResult(
                 plan=plan,
                 prompt_id=prompt_id,
@@ -259,6 +265,35 @@ class GenerationEngine:
                 duration_seconds=duration,
                 progress_events=progress_events,
             )
+
+    async def _write_sidecar(
+        self,
+        plan,
+        prompt_id: str,
+        outputs: list[dict],
+        duration: float,
+    ) -> None:
+        """Write provenance sidecar JSON alongside generation outputs."""
+        import json
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        meta_dir = Path(self._settings.comfyui.output_dir) / "ez_comfy_meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+
+        sidecar = {
+            "schema_version": "1.0",
+            "prompt_id": prompt_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "duration_seconds": round(duration, 2),
+            "provenance": plan.provenance.to_dict(),
+            "plan_summary": plan.summary(),
+            "outputs": outputs,
+        }
+
+        path = meta_dir / f"{prompt_id}.json"
+        path.write_text(json.dumps(sidecar, indent=2, default=str), encoding="utf-8")
+        logger.debug("Wrote provenance sidecar: %s", path)
 
 
 # ---------------------------------------------------------------------------

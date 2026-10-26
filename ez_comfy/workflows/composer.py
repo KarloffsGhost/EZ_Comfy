@@ -40,5 +40,27 @@ def compose_workflow(plan: GenerationPlan) -> dict:
     return builder(plan)
 
 
+def compose_annotated_workflow(plan: GenerationPlan) -> dict:
+    """Compose workflow and inject a Note node carrying provenance information.
+
+    The Note node renders as a sticky note in ComfyUI's canvas, so provenance
+    travels with the workflow when exported and re-imported by power users.
+    """
+    workflow = compose_workflow(plan)
+
+    # Find a free node ID (max existing numeric ID + 1)
+    max_id = max((int(k) for k in workflow if k.isdigit()), default=0)
+    note_id = str(max_id + 1)
+
+    workflow[note_id] = {
+        "class_type": "Note",
+        "inputs": {
+            "text": plan.provenance.to_human_readable(),
+        },
+        "_meta": {"title": "EZ Comfy Provenance"},
+    }
+    return workflow
+
+
 def list_builders() -> list[str]:
     return sorted(_BUILDERS)

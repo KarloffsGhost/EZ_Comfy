@@ -279,22 +279,32 @@ def adapt_prompt(
     style_preset: StylePreset | None = None,
     family: str = "sdxl",
     auto_negative: bool = True,
-) -> tuple[str, str]:
+) -> tuple[str, str, list[str]]:
     """
     Adapt prompt and negative prompt for the selected model's syntax.
-    Returns (adapted_positive, adapted_negative).
+    Returns (adapted_positive, adapted_negative, changes) where changes is a
+    list of human-readable descriptions of what was modified.
     """
     positive = user_prompt.strip()
     negative = negative_prompt.strip()
+    changes: list[str] = []
 
     # 1. Emphasis normalization
-    positive = _normalize_emphasis(positive, syntax.emphasis_format)
+    normalized = _normalize_emphasis(positive, syntax.emphasis_format)
+    if normalized != positive:
+        if syntax.emphasis_format == "none":
+            changes.append("Stripped emphasis weights (Flux does not support weighted syntax)")
+        else:
+            changes.append("Converted NAI emphasis syntax to weighted format")
+    positive = normalized
 
     # 2. Quality prefix/suffix injection
     if syntax.quality_prefix and not positive.startswith(syntax.quality_prefix.strip(", ")):
         positive = syntax.quality_prefix + positive
+        changes.append(f"Added {family} quality prefix: {syntax.quality_prefix.strip()!r}")
     if syntax.quality_suffix and not positive.endswith(syntax.quality_suffix.strip(", ")):
         positive = positive + syntax.quality_suffix
+        changes.append(f"Added {family} quality suffix: {syntax.quality_suffix.strip()!r}")
 
     # 3. Style preset expansion
     if style_preset is not None:
@@ -307,6 +317,7 @@ def adapt_prompt(
                 positive = positive.rstrip(".") + " " + pos_tokens.strip(", ")
             else:
                 positive = positive.rstrip(", ") + pos_tokens
+            changes.append(f"Injected style preset tokens: {style_preset.name!r}")
         if neg_tokens:
             negative = (negative.rstrip(", ") + neg_tokens) if negative else neg_tokens.strip(", ")
 
@@ -316,7 +327,10 @@ def adapt_prompt(
     for pack in active_packs:
         pos_terms = pack.positive_tokens.get(group, ())
         if pos_terms:
+            before = positive
             positive = _append_terms(positive, pos_terms)
+            if positive != before:
+                changes.append(f"Injected domain pack tokens ({pack.id})")
 
         neg_terms = pack.negative_tokens.get(group, ())
         if neg_terms and syntax.negative_required and (auto_negative or negative):
@@ -325,12 +339,15 @@ def adapt_prompt(
     # 5. Auto-generate negative if blank
     if not negative and auto_negative and syntax.negative_required:
         negative = syntax.default_negative
+        changes.append(f"Generated default negative prompt for {family} family")
 
     # 6. Flux: clear negative entirely (ignored by model)
     if not syntax.negative_required:
+        if negative:
+            changes.append("Cleared negative prompt (Flux ignores negatives)")
         negative = ""
 
-    return positive, negative
+    return positive, negative, changes
 
 
 def _normalize_emphasis(prompt: str, emphasis_format: str) -> str:

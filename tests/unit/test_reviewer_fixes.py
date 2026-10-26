@@ -86,7 +86,7 @@ def test_issue3_audio_raises_without_capabilities():
 
 def test_issue3_txt2img_still_falls_back():
     """txt2img always has a fallback; it must not raise."""
-    recipe = select_recipe(
+    recipe, _rejected = select_recipe(
         intent=PipelineIntent.TXT2IMG,
         prompt="a cat",
         has_reference_image=False,
@@ -104,7 +104,7 @@ def test_issue4_override_warns_on_missing_capabilities():
     import warnings
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        recipe = select_recipe(
+        recipe, _rejected = select_recipe(
             intent=PipelineIntent.IMG2IMG,
             prompt="test",
             has_reference_image=True,
