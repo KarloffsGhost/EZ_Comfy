@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from ez_comfy import __version__
+
 
 class GenerateRequest(BaseModel):
     """Request body for POST /v1/generate (JSON-only path, no image uploads)."""
@@ -148,4 +150,4 @@ class HealthResponse(BaseModel):
     gpu_vram_gb: float
     checkpoints_loaded: int
     queue_depth: int
-    version: str = "1.0.0"
+    version: str = __version__

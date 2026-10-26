@@ -29,12 +29,14 @@ def _load_settings(config: str | None) -> "Settings":
 # ---------------------------------------------------------------------------
 
 async def _cmd_check(args: argparse.Namespace) -> int:
-    from ez_comfy.comfyui.autodetect import detect_comfyui
+    from ez_comfy.comfyui.autodetect import desktop_model_path, detect_comfyui, stale_model_path_warning
     from ez_comfy.comfyui.client import ComfyUIClient
+    from ez_comfy.compat import version_line
     from ez_comfy.hardware.comfyui_inventory import scan_inventory
     from ez_comfy.hardware.probe import probe_hardware
 
     settings = _load_settings(args.config)
+    configured_model_path = settings.comfyui.model_base_path or None
 
     if settings.comfyui.auto_detect:
         detected = detect_comfyui(
@@ -55,6 +57,18 @@ async def _cmd_check(args: argparse.Namespace) -> int:
         print("ERROR: ComfyUI is not reachable. Is it running?")
         await client.close()
         return 1
+
+    comfyui_version = None
+    try:
+        stats = await client.system_stats()
+        comfyui_version = (stats.get("system") or {}).get("comfyui_version")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Could not read ComfyUI version from /system_stats: %s", exc)
+    print(version_line(comfyui_version))
+
+    stale_warning = stale_model_path_warning(configured_model_path, desktop_model_path())
+    if stale_warning:
+        print(stale_warning)
 
     hw = probe_hardware()
     print(f"GPU     : {hw.gpu_name}  ({hw.gpu_vram_gb:.1f} GB VRAM)")

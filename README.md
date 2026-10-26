@@ -121,6 +121,7 @@ python -m ez_comfy check
 Output:
 ```
 Checking ComfyUI at http://127.0.0.1:8188 …
+ComfyUI version: 0.42.0
 GPU     : NVIDIA GeForce RTX 4070  (12.0 GB VRAM)
 RAM     : 32.0 GB
 Platform: win32
@@ -133,6 +134,9 @@ Checkpoints : 7
 LoRAs       : 3
 Capabilities: ['ControlNetLoader', 'IPAdapterModelLoader', ...]
 ```
+
+`check` also warns (it never changes anything) if `comfyui.model_base_path` points at a folder that no longer
+exists, and if your ComfyUI version is outside the range listed in [COMPAT.md](COMPAT.md).
 
 
 ### Generate from the command line

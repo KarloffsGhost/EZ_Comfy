@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
+from ez_comfy import __version__
 from ez_comfy.comfyui.client import ComfyUIClient
 from ez_comfy.config.schema import Settings
 from ez_comfy.engine import GenerationEngine, GenerationQueue
@@ -67,7 +68,7 @@ def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(
         title="EZ Comfy",
         description="Hardware-aware ComfyUI orchestrator with intelligent model and workflow selection",
-        version="1.0.0",
+        version=__version__,
         lifespan=_lifespan,
     )
     app.state.settings = settings

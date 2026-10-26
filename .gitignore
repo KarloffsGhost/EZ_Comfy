@@ -43,3 +43,6 @@ Thumbs.db
 
 # mypy
 .mypy_cache/
+
+# Fixture capture staging (review before copying into tests/fixtures/)
+fixture_staging/
