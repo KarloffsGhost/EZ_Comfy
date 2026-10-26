@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 
-from ez_comfy.comfyui.client import ComfyUIClient, ProgressEvent
+from ez_comfy.comfyui.client import CancelResult, ComfyUIClient, GenerationCancelled, ProgressEvent
 from ez_comfy.comfyui.vram import vram_guard
 from ez_comfy.config.schema import Settings
 from ez_comfy.hardware.comfyui_inventory import ComfyUIInventory, scan_inventory
@@ -59,6 +59,8 @@ class QueuedJob:
     queued_at: float = field(default_factory=time.monotonic)
     started_at: float | None = None
     finished_at: float | None = None
+    prompt_id: str | None = None     # ComfyUI prompt id once submitted
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +87,10 @@ class GenerationEngine:
         self._hardware = hardware
         self._inventory = inventory
         self._gpu_lock: asyncio.Lock = asyncio.Lock()
+        # The in-flight prompt (at most one, guarded by _gpu_lock) so it can be cancelled by id.
+        self._current_prompt_id: str | None = None
+        self._current_waiter: asyncio.Future | None = None
+        self._cancel_requested: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -129,11 +135,17 @@ class GenerationEngine:
         prefer_speed: bool | None = None,
         auto_negative: bool | None = None,
         timeout: float = 300.0,
+        on_submitted: Callable[[str], None] | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> GenerationResult:
         """
         Full generation pipeline:
           plan → upload images → compose → submit → wait → extract outputs.
         Acquires GPU lock for the duration.
+
+        on_submitted(prompt_id) fires once ComfyUI accepts the prompt. If cancel_event is set
+        (possibly before submission), the prompt is cancelled as soon as it exists.
+        Raises GenerationCancelled when the prompt is cancelled or interrupted.
         """
         async with self._gpu_lock:
             return await self._run_generation(
@@ -142,7 +154,21 @@ class GenerationEngine:
                 prefer_speed=prefer_speed,
                 auto_negative=auto_negative,
                 timeout=timeout,
+                on_submitted=on_submitted,
+                cancel_event=cancel_event,
             )
+
+    async def cancel_prompt(self, prompt_id: str) -> CancelResult:
+        """Cancel one prompt by id (never an unscoped interrupt) and end its wait promptly.
+
+        A prompt deleted while still pending in ComfyUI produces no websocket message, so the
+        in-flight wait is cancelled here rather than left to time out.
+        """
+        result = await self._client.cancel_prompt(prompt_id)
+        if result.cancelled and prompt_id == self._current_prompt_id and self._current_waiter is not None:
+            self._cancel_requested.add(prompt_id)
+            self._current_waiter.cancel()
+        return result
 
     async def compare(
         self,
@@ -189,6 +215,8 @@ class GenerationEngine:
         prefer_speed: bool | None,
         auto_negative: bool | None,
         timeout: float,
+        on_submitted: Callable[[str], None] | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> GenerationResult:
         progress_events: list[ProgressEvent] = []
 
@@ -234,19 +262,40 @@ class GenerationEngine:
             workflow = compose_workflow(plan)
             logger.debug("Composed workflow with %d nodes for recipe %s", len(workflow), plan.recipe.id)
 
-            # 4. Submit — keep client_id so the WS listener sees the same session
-            prompt_id, client_id = await self._client.queue_prompt(workflow)
-            logger.info("Submitted prompt %s (recipe=%s, checkpoint=%s)", prompt_id, plan.recipe.id, plan.checkpoint)
+            # 4. Open the progress socket BEFORE submitting so a fast or fully cached prompt
+            #    cannot finish before we are listening, then submit with the same client_id.
+            client_id = str(uuid.uuid4())
+            async with self._client.progress_socket(client_id) as ws:
+                prompt_id, client_id = await self._client.queue_prompt(workflow, client_id=client_id)
+                logger.info("Submitted prompt %s (recipe=%s, checkpoint=%s)", prompt_id, plan.recipe.id, plan.checkpoint)
+                if on_submitted:
+                    on_submitted(prompt_id)
 
-            # 5. Wait for completion using the same client_id
-            t0 = time.monotonic()
-            history_entry = await self._client.wait_for_completion(
-                prompt_id=prompt_id,
-                client_id=client_id,
-                timeout=timeout,
-                on_progress=_collect,
-            )
-            duration = time.monotonic() - t0
+                # 5. Wait for completion using the same client_id
+                t0 = time.monotonic()
+                waiter = asyncio.ensure_future(self._client.wait_for_completion(
+                    prompt_id=prompt_id,
+                    client_id=client_id,
+                    timeout=timeout,
+                    on_progress=_collect,
+                    ws=ws,
+                ))
+                self._current_prompt_id = prompt_id
+                self._current_waiter = waiter
+                try:
+                    if cancel_event is not None and cancel_event.is_set():
+                        await self.cancel_prompt(prompt_id)
+                    history_entry = await waiter
+                except asyncio.CancelledError:
+                    if prompt_id in self._cancel_requested:
+                        raise GenerationCancelled(f"Prompt {prompt_id} was cancelled") from None
+                    raise
+                finally:
+                    waiter.cancel()  # no-op if finished; stops the wait on any other exit path
+                    self._current_prompt_id = None
+                    self._current_waiter = None
+                    self._cancel_requested.discard(prompt_id)
+                duration = time.monotonic() - t0
 
             # 6. Extract outputs
             outputs = self._client.extract_outputs(history_entry)
@@ -344,6 +393,20 @@ class GenerationQueue:
         logger.info("Cancelled queued job %s", job_id)
         return True
 
+    async def cancel_running(self, job_id: str) -> bool:
+        """Cancel a job that is currently running. False if unknown, not running, or already finished."""
+        job = self._jobs.get(job_id)
+        if not job or job.status != "running":
+            return False
+        job.cancel_event.set()
+        if job.prompt_id is None:
+            # Not submitted to ComfyUI yet; the engine cancels the prompt right after submission.
+            logger.info("Cancel requested for job %s before submission", job_id)
+            return True
+        result = await self._engine.cancel_prompt(job.prompt_id)
+        logger.info("Cancel running job %s (prompt %s): %s", job_id, job.prompt_id, result.method)
+        return result.cancelled
+
     def get_job(self, job_id: str) -> QueuedJob | None:
         return self._jobs.get(job_id)
 
@@ -366,10 +429,17 @@ class GenerationQueue:
                 logger.info("Processing job %s", job_id)
 
                 try:
-                    result = await self._engine.generate(job.request)
+                    result = await self._engine.generate(
+                        job.request,
+                        on_submitted=lambda prompt_id, job=job: setattr(job, "prompt_id", prompt_id),
+                        cancel_event=job.cancel_event,
+                    )
                     job.result = result
                     job.status = "done"
                     logger.info("Job %s done in %.1fs", job_id, result.duration_seconds)
+                except GenerationCancelled:
+                    job.status = "cancelled"
+                    logger.info("Job %s cancelled while running", job_id)
                 except Exception as exc:
                     job.error = str(exc)
                     job.status = "error"

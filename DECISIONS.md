@@ -2,6 +2,24 @@
 
 Non-obvious choices, newest first. Each entry: date, decision, why.
 
+## 2026-10-24 — Client hardening: frames, completion, cancel (WI-4)
+
+**Live checks (V3, V4) on ComfyUI 0.42.0**, tiny SD1.5 jobs (512x512, `PreviewImage` so nothing landed in `output/`), GPU at 0-8% beforehand:
+
+- **V3.** This server runs with previews off, so a plain prompt sends **no** binary frames (the first run saw only JSON messages). Previews can be requested per prompt with `extra_data.preview_method` (`execution.py:734`; it resets after each prompt), which is how frames were captured without changing any server setting. 25 frames, all event type 1, header `00000001 00000001 ffd8ffe000104a46` (type 1, image type 1 = JPEG, then JPEG data), ~44-50 KB each. Matches the parser. The old `raw[8:]` slice was correct for type 1; its defect was treating TEXT/other frames as images. Only the 16-byte header is stored as a fixture (`tests/fixtures/ws_frames/`), not images. EZ_Comfy does not send `extra_data.preview_method`, so on a server with previews off the UI simply gets no previews; left as is (non-goal).
+- **V4.** `POST /api/jobs/{id}/cancel` verified: cancels a running prompt (`{"cancelled": true}`, the waiter ended with `GenerationCancelled`), cancels a pending prompt while the running one is untouched, and returns `{"cancelled": false}` (HTTP 200) for a finished or unknown id. Queue empty at the end. Source confirms `execution_interrupted` carries `prompt_id` and `execution_success` exists (`execution.py:702,828`).
+
+**Decisions.**
+
+- Cancel prefers the job API (idempotent, no check-then-act race); falls back to `/queue` delete (pending) or `/interrupt` with `{"prompt_id": ...}` (running) when it returns 404/405. An unscoped interrupt is never sent.
+- A prompt deleted while pending produces no websocket message, so the engine also cancels its in-flight wait after a successful cancel instead of waiting for a message that never comes.
+- The progress socket is opened before `queue_prompt` (`ComfyUIClient.progress_socket`; yields `None` and falls back to polling if it cannot connect), the history is checked once right after listening starts, and the websocket and polling fallback share one deadline.
+- `execution_success` is accepted as a completion signal alongside `executing` with `node: null`.
+- New `GenerationError(RuntimeError)` and `GenerationCancelled(GenerationError)`: existing handlers that catch `RuntimeError` keep working, and an execution error no longer falls through to a pointless polling pass.
+- `GenerationQueue.cancel` keeps its synchronous `bool` signature; `cancel_running` is new. `DELETE /v1/queue/{job_id}` tries queued, then running, then returns the same 404 as before.
+- `_wait_websocket(prompt_id, client_id, timeout, on_progress)` keeps its original call shape (ws is passed as a keyword only when given) so the existing test that stubs it is unchanged.
+- Opting in to metadata previews (`feature_flags`) is not done (D5 = no); the parser still tolerates type 4.
+
 ## 2026-10-24 — Tolerant combo parsing and exact upscaler filenames (WI-2 item 1, pulled forward)
 
 **Decision.** `_extract_list` accepts both combo shapes (`[[options], {...}]` and `["COMBO", {"options": [...]}]`), warns on any other shape, and is used for samplers/schedulers too. `ModelRecommendation` gained `installed_filename` (defaulted), and the upscale builder sends that exact name when present.

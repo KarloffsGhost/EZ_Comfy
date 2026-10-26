@@ -468,7 +468,7 @@ async def job_status(request: Request, job_id: str) -> JobStatusResponse:
 @router.delete("/v1/queue/{job_id}")
 async def cancel_job(request: Request, job_id: str) -> dict:
     q = _queue(request)
-    cancelled = q.cancel(job_id)
+    cancelled = q.cancel(job_id) or await q.cancel_running(job_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found or not cancellable")
     return {"job_id": job_id, "status": "cancelled"}
