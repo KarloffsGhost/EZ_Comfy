@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+from enum import Enum
+
+
+class PipelineIntent(str, Enum):
+    TXT2IMG = "txt2img"
+    IMG2IMG = "img2img"
+    INPAINT  = "inpaint"
+    UPSCALE  = "upscale"
+    VIDEO    = "video"
+    AUDIO    = "audio"
+
+
+_VIDEO_KEYWORDS = {
+    "video", "animate", "animation", "motion", "mov", "gif",
+    "film", "cinematic video", "moving",
+}
+_AUDIO_KEYWORDS = {
+    "sound", "audio", "music", "song", "melody", "beat", "sfx",
+    "noise", "ambient sound", "soundtrack",
+}
+_UPSCALE_KEYWORDS = {
+    "upscale", "upscaling", "enhance resolution", "4x", "2x", "super resolution",
+    "hd", "high resolution", "increase resolution",
+}
+_INPAINT_KEYWORDS = {
+    "remove", "replace", "fill", "inpaint", "erase", "delete",
+    "background removal", "change background",
+}
+_IMG2IMG_KEYWORDS = {
+    "style", "painterly", "transform", "convert", "make it",
+    "turn into", "change to", "modify", "edit",
+}
+
+
+def _matches(lower: str, keywords: set[str]) -> bool:
+    """Check if any keyword appears as a whole word (or phrase) in the prompt."""
+    import re
+    for kw in keywords:
+        if " " in kw:
+            # Multi-word phrase: simple substring is fine
+            if kw in lower:
+                return True
+        else:
+            # Single token: require word boundary
+            if re.search(r"\b" + re.escape(kw) + r"\b", lower):
+                return True
+    return False
+
+
+def detect_intent(
+    prompt: str,
+    has_reference_image: bool = False,
+    has_mask: bool = False,
+) -> PipelineIntent:
+    """
+    Heuristic intent detection from prompt text + image/mask presence.
+    Fast, no LLM required.
+    """
+    lower = prompt.lower()
+
+    # Audio signals (check before video to avoid false positives)
+    if _matches(lower, _AUDIO_KEYWORDS):
+        return PipelineIntent.AUDIO
+
+    # Video signals
+    if _matches(lower, _VIDEO_KEYWORDS):
+        return PipelineIntent.VIDEO
+
+    # Upscale signals (with or without image)
+    if _matches(lower, _UPSCALE_KEYWORDS) and has_reference_image:
+        return PipelineIntent.UPSCALE
+
+    # Image-conditional intents
+    if has_reference_image:
+        if has_mask or _matches(lower, _INPAINT_KEYWORDS):
+            return PipelineIntent.INPAINT
+        if _matches(lower, _IMG2IMG_KEYWORDS):
+            return PipelineIntent.IMG2IMG
+        # Default when image provided: img2img
+        return PipelineIntent.IMG2IMG
+
+    return PipelineIntent.TXT2IMG
