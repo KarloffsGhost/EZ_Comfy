@@ -56,17 +56,17 @@ python -m ez_comfy generate "a lighthouse on a rocky coast at sunset, waves cras
 
 Wan 2.2 14B does not fit in 16 GB of VRAM, so ComfyUI offloads to system RAM and renders are slow. Measured results (ComfyUI 0.42.0, default 640x640, 81 frames, 20 steps):
 
-| Setup | Render time | Peak power / temperature |
+| Setup (one video per card) | Render time | Peak power / temperature |
 |-------|-------------|--------------------------|
 | 16 GB card, alone | 639 s (10.7 min) | 285 W / 65 C |
 | Same card, while a second card also renders | 693 s | 268 W / 66 C |
-| Second 16 GB card (PCIe x4 link), while the first card also renders | 1277 s (21 min) | 179 W / 77 C |
+| A different, slower 16 GB card (PCIe x4 link, lower power limit), while the first card also renders | 1277 s (21 min) | 179 W / 77 C |
 
 The planner warns about this and tells you to raise `--timeout` (default 300 s) instead of silently changing it. The full run log is in [COMPAT.md](COMPAT.md). Still to come: the 4-step LoRA variant, image-to-video, and LTX.
 
 ## Two GPUs
 
-EZ Comfy has been run against two cards at once by starting one ComfyUI instance per GPU (`--cuda-device 0` and `--cuda-device 1`, on different ports) and pointing a separate EZ Comfy process at each. Both cards rendered the same Wan 2.2 job at the same time with the combined GPU draw around 430 W and no failures. Treat it as one job per card: nothing splits a single model across cards. Automatic routing between instances is not built yet; for now you choose the instance with `comfyui.base_url`.
+EZ Comfy has been run against two cards at once by starting one ComfyUI instance per GPU (`--cuda-device 0` and `--cuda-device 1`, on different ports) and pointing a separate EZ Comfy process at each. Both cards rendered the same Wan 2.2 job at the same time with the combined GPU draw around 430 W and no failures. Each card rendered its own video, so two GPUs do not make one video slower; they produce two videos in the time the slower card needs. The second card is a lower-tier model on a x4 link and was not timed alone, so its longer time says nothing about the cost of running two cards. Treat it as one job per card: nothing splits a single model across cards. Automatic routing between instances is not built yet; for now you choose the instance with `comfyui.base_url`.
 
 ## Why It Matters
 
