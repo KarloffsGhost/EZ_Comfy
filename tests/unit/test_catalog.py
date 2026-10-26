@@ -196,9 +196,7 @@ def test_unique_ids():
 
 def test_unique_filenames():
     filenames = [e.filename for e in MODEL_CATALOG]
-    dupes = [fn for fn in filenames if filenames.count(fn) > 1]
-    # flux_hyper shares the flux1-dev filename (it's a LoRA on top); exclude that known case
-    dupes = [d for d in set(dupes) if d not in ("flux1-dev",)]
+    dupes = sorted({fn for fn in filenames if filenames.count(fn) > 1})
     assert not dupes, f"Unexpected duplicate filenames: {dupes}"
 
 
@@ -223,3 +221,115 @@ def test_flux_entries_strip_emphasis_weights():
         assert entry.prompt_syntax.emphasis_format == "none", (
             f"{entry.id}: Flux entry must use emphasis_format='none' to strip (word:1.3) weights"
         )
+
+
+# ---------------------------------------------------------------------------
+# WI-7a: one installed file maps to at most one catalog entry
+# ---------------------------------------------------------------------------
+import logging
+
+from ez_comfy.models.catalog import (
+    ModelCatalogEntry,
+    _model_name_matches,
+    match_installed_file,
+    resolve_installed_filename,
+)
+
+
+def _entry(entry_id: str, filename: str, family: str = "sdxl") -> ModelCatalogEntry:
+    base = next(e for e in MODEL_CATALOG if e.family == family)
+    return ModelCatalogEntry(
+        id=entry_id, name=entry_id, family=family, variant=None, source="test",
+        filename=filename, size_gb=1.0, vram_min_gb=1.0, vram_recommended_gb=2.0,
+        strengths=[], weaknesses=[], best_for=[], style_tags=[],
+        settings=base.settings, prompt_syntax=base.prompt_syntax,
+    )
+
+
+def test_self_resolution_all_entries():
+    for entry in MODEL_CATALOG:
+        resolved = match_installed_file(entry.filename + ".safetensors", MODEL_CATALOG)
+        assert resolved is entry, f"{entry.id}: own filename resolved to {getattr(resolved, 'id', None)}"
+
+
+def test_old_cross_matches_all_resolve_to_single_correct_entry():
+    """Every pair the old per-entry rule confused must now resolve to the file's own entry."""
+    confused = [
+        (a, b) for a in MODEL_CATALOG for b in MODEL_CATALOG
+        if a is not b and _model_name_matches(a.filename, b.filename + ".safetensors")
+    ]
+    assert confused, "expected the old rule to still report cross-matches (guards this test)"
+    for _, owner in confused:
+        assert match_installed_file(owner.filename + ".safetensors", MODEL_CATALOG) is owner
+
+
+@pytest.mark.parametrize("installed, expected_id", [
+    ("flux1-dev.safetensors", "flux_dev"),
+    ("flux1-schnell.safetensors", "flux_schnell"),
+    ("flux1-dev-fp8.safetensors", "flux_dev_fp8"),
+    ("flux1-schnell-fp8.safetensors", "flux_schnell_fp8"),
+])
+def test_flux_dev_vs_schnell_not_confused(installed, expected_id):
+    assert match_installed_file(installed, MODEL_CATALOG).id == expected_id
+
+
+def test_flux_dev_installed_only_marks_dev_entries():
+    inv = _inventory(["flux1-dev.safetensors"])
+    by_id = {e.id: e for e in MODEL_CATALOG}
+    assert resolve_installed_filename(by_id["flux_dev"], inv) == "flux1-dev.safetensors"
+    for other in ("flux_schnell", "flux_dev_fp8", "flux_schnell_fp8", "flux_hyper_8step", "flux_merged_gguf_q8"):
+        assert resolve_installed_filename(by_id[other], inv) is None, other
+
+
+def test_pony_vs_pony_turbo():
+    assert match_installed_file("ponyDiffusionV6XL.safetensors", MODEL_CATALOG).id == "pony_diffusion_v6_xl"
+    assert match_installed_file("ponyDiffusionV6XL_turbo.safetensors", MODEL_CATALOG).id == "pony_diffusion_v6_xl_turbo"
+
+
+def test_realvis_fuzzy_variant_still_matches():
+    """Non-colliding names keep the old fuzzy behaviour."""
+    entry = match_installed_file("realvisxlV50_v50LightningBakedvae.safetensors", MODEL_CATALOG)
+    assert entry is not None and entry.id == "realvis_xl_v50_lightning"
+
+
+def test_tie_returns_none_and_logs(caplog):
+    twins = [_entry("twin_a", "sameModelName"), _entry("twin_b", "sameModelName")]
+    with caplog.at_level(logging.WARNING, logger="ez_comfy.models.catalog"):
+        assert match_installed_file("sameModelName.safetensors", twins) is None
+    assert "twin_a" in caplog.text and "twin_b" in caplog.text
+
+
+def test_unrelated_file_matches_nothing():
+    assert match_installed_file("zzz_nonexistent_model_xyz.safetensors", MODEL_CATALOG) is None
+
+
+def test_new_field_defaults():
+    entry = _entry("defaults", "defaultsModel")
+    assert entry.loader == "checkpoint"
+    assert entry.requires_text_encoders == []
+    assert entry.requires_vae is None
+    assert entry.execution_supported is True
+    assert entry.verified_on is None
+
+
+def test_entries_without_workflow_builder_are_flagged():
+    unsupported = {e.id for e in MODEL_CATALOG if not e.execution_supported}
+    assert unsupported == {"animatediff_lightning", "mochi_preview", "wan_video_1_3b"}
+
+
+def test_unsupported_entries_not_selected_for_generation():
+    hw = _hardware(16.0)
+    inv = _inventory()
+    # Make the video-family entries reachable so the filter itself is what is under test.
+    import ez_comfy.models.catalog as cat
+    original = cat._intent_compatible_families
+    cat._intent_compatible_families = lambda intent: {"svd", "animatediff", "mochi", "wan_video"}
+    try:
+        planner_view = recommend_models("a video of waves", "video", hw, inv, top_n=20, runnable_only=True)
+        listing_view = recommend_models("a video of waves", "video", hw, inv, top_n=20)
+    finally:
+        cat._intent_compatible_families = original
+    assert planner_view and all(r.entry.execution_supported for r in planner_view)
+    unrunnable = [r for r in listing_view if not r.entry.execution_supported]
+    assert unrunnable, "listing view should still show unsupported entries"
+    assert all("not yet runnable" in " ".join(r.warnings) for r in unrunnable)

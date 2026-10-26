@@ -132,6 +132,7 @@ def plan_generation(
         inventory=inventory,
         prefer_speed=prefer_speed,
         top_n=8,
+        runnable_only=True,
     )
 
     # 3. Select checkpoint

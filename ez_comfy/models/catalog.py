@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 
 from ez_comfy.hardware.probe import HardwareProfile
 from ez_comfy.hardware.comfyui_inventory import ComfyUIInventory
 from ez_comfy.models.profiles import ModelSettings, PromptSyntax, _NEG_SDXL, _NEG_SD15, _NEG_ANIME, _NEG_PONY
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,6 +44,11 @@ class ModelCatalogEntry:
     download_command: str = ""
     license: str = "creativeml-openrail-m"
     gated: bool = False
+    loader: str = "checkpoint"           # "checkpoint" | "diffusion_model" (UNETLoader)
+    requires_text_encoders: list[str] = field(default_factory=list)
+    requires_vae: str | None = None
+    execution_supported: bool = True     # False = no workflow builder yet; never auto-selected
+    verified_on: str | None = None       # date a real run succeeded; None = never verified
 
     @property
     def effective_family(self) -> str:
@@ -88,7 +96,7 @@ def _anime_syntax() -> PromptSyntax:
 
 
 # ---------------------------------------------------------------------------
-# v1 Model Catalog (~15 curated entries)
+# Curated model catalog (entry count: see len(MODEL_CATALOG))
 # ---------------------------------------------------------------------------
 MODEL_CATALOG: list[ModelCatalogEntry] = [
 
@@ -609,7 +617,9 @@ MODEL_CATALOG: list[ModelCatalogEntry] = [
         name="Flux Hyper 8-Step LoRA",
         family="flux", variant=None,
         source="ByteDance/Hyper-SD",
-        filename="flux1-dev",
+        # Distinct from flux_dev ("flux1-dev"): this entry is dev + the Hyper-SD LoRA, so it
+        # must not claim the plain dev checkpoint (see DECISIONS.md, 2026-10-24).
+        filename="flux1-dev-hyper-8step",
         size_gb=23.8, vram_min_gb=12.0, vram_recommended_gb=16.0,
         strengths=["speed", "prompt_adherence", "text_rendering"],
         weaknesses=["vram_hungry", "anime", "requires_lora"],
@@ -669,6 +679,7 @@ MODEL_CATALOG: list[ModelCatalogEntry] = [
                                    default_negative="bad quality, worst quality"),
         download_command="huggingface-cli download ByteDance/AnimateDiff-Lightning --include '*.safetensors'",
         required_capabilities=["animatediff"],
+        execution_supported=False,
     ),
 
     ModelCatalogEntry(
@@ -687,10 +698,11 @@ MODEL_CATALOG: list[ModelCatalogEntry] = [
                                    quality_suffix=None, negative_required=False, default_negative=""),
         download_command="huggingface-cli download genmo/mochi-1-preview --include '*.safetensors'",
         required_capabilities=["MochiVideoLatent"],
+        execution_supported=False,
     ),
 
     ModelCatalogEntry(
-        id="wan_video_14b",
+        id="wan_video_1_3b",
         name="Wan Video 1.3B (Text-to-Video)",
         family="wan_video", variant=None,
         source="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
@@ -705,6 +717,7 @@ MODEL_CATALOG: list[ModelCatalogEntry] = [
                                    quality_suffix=None, negative_required=False, default_negative=""),
         download_command="huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B-Diffusers --include '*.safetensors'",
         required_capabilities=["WanVideoModelLoader"],
+        execution_supported=False,
     ),
 
     # -------------------------------------------------------------------------
@@ -852,13 +865,22 @@ def _intent_compatible_families(intent_str: str) -> set[str]:
 
 def _is_installed(entry: ModelCatalogEntry, inventory: ComfyUIInventory) -> bool:
     """Check if catalog entry's checkpoint is installed."""
-    if entry.family == "upscaler":
-        return any(_model_name_matches(entry.filename, up) for up in inventory.upscale_models)
-    return any(_model_name_matches(entry.filename, ck.filename) for ck in inventory.checkpoints)
+    return resolve_installed_filename(entry, inventory) is not None
+
+
+_MODEL_FILE_EXTENSIONS = (".safetensors", ".ckpt", ".pth", ".pt", ".bin", ".gguf")
 
 
 def _normalize_model_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def _strip_model_extension(name: str) -> str:
+    lower = name.lower()
+    for ext in _MODEL_FILE_EXTENSIONS:
+        if lower.endswith(ext):
+            return name[: -len(ext)]
+    return name
 
 
 def _model_signature_parts(name: str) -> list[str]:
@@ -878,22 +900,63 @@ def _model_signature_parts(name: str) -> list[str]:
     return [p for p in parts if len(p) >= 3]
 
 
-def _model_name_matches(expected_name: str, installed_name: str) -> bool:
+def _match_rank(expected_name: str, installed_name: str) -> tuple[int, int, int] | None:
+    """Rank how well a catalog filename token matches an installed file; None = no match.
+
+    Higher tuples are more specific. Tiers: 4 exact (ignoring extension), 3 catalog token
+    contained in the installed name (longer token wins), 2 installed name contained in the
+    catalog token, 1 fuzzy signature parts (more/longer parts win).
+    """
     expected_norm = _normalize_model_name(expected_name)
     installed_norm = _normalize_model_name(installed_name)
+    installed_stem_norm = _normalize_model_name(_strip_model_extension(installed_name))
 
-    if expected_norm and (
-        expected_norm in installed_norm
-        or installed_norm.startswith(expected_norm)
-        or installed_norm in expected_norm
-    ):
-        return True
+    if expected_norm:
+        if expected_norm == installed_stem_norm:
+            return (4, len(expected_norm), 0)
+        if expected_norm in installed_norm:
+            return (3, len(expected_norm), 0)
+        if installed_norm in expected_norm:
+            return (2, len(expected_norm), 0)
 
     parts = _model_signature_parts(expected_name)
     if not parts:
-        return False
-    matched = sum(1 for p in parts if p in installed_norm)
-    return matched >= min(2, len(parts))
+        return None
+    matched_parts = [p for p in parts if p in installed_norm]
+    if len(matched_parts) >= min(2, len(parts)):
+        return (1, len(matched_parts), sum(len(p) for p in matched_parts))
+    return None
+
+
+def _model_name_matches(expected_name: str, installed_name: str) -> bool:
+    return _match_rank(expected_name, installed_name) is not None
+
+
+def match_installed_file(
+    filename: str, entries: list[ModelCatalogEntry]
+) -> ModelCatalogEntry | None:
+    """Map one installed file to the single most specific catalog entry.
+
+    Returns None when nothing matches, or when the best two matches tie (logged), so a
+    file is never silently attributed to the wrong entry.
+    """
+    ranked: list[tuple[tuple[int, int, int], ModelCatalogEntry]] = []
+    for entry in entries:
+        rank = _match_rank(entry.filename, filename)
+        if rank is not None:
+            ranked.append((rank, entry))
+    if not ranked:
+        return None
+
+    best_rank = max(rank for rank, _ in ranked)
+    best = [entry for rank, entry in ranked if rank == best_rank]
+    if len(best) > 1:
+        logger.warning(
+            "Installed file %r matches catalog entries %s equally well; leaving it unmatched",
+            filename, [e.id for e in best],
+        )
+        return None
+    return best[0]
 
 
 def recommend_models(
@@ -905,8 +968,13 @@ def recommend_models(
     prefer_installed: bool = True,
     prefer_speed: bool = True,
     top_n: int = 3,
+    runnable_only: bool = False,
 ) -> list[ModelRecommendation]:
-    """Rank catalog entries for a prompt + intent, returning top N recommendations."""
+    """Rank catalog entries for a prompt + intent, returning top N recommendations.
+
+    Entries with no workflow builder (execution_supported=False) are labelled "not yet
+    runnable"; with runnable_only=True (used by the planner) they are excluded.
+    """
     if catalog is None:
         catalog = MODEL_CATALOG
 
@@ -919,12 +987,16 @@ def recommend_models(
     for entry in catalog:
         if entry.family not in compatible_families:
             continue
+        if runnable_only and not entry.execution_supported:
+            continue
 
         fits_vram = entry.vram_min_gb <= hardware.gpu_vram_gb
         installed = _is_installed(entry, inventory)
         reasons: list[str] = []
         warnings: list[str] = []
         score = 0.0
+        if not entry.execution_supported:
+            warnings.append("not yet runnable (no workflow builder)")
 
         # Strength match (+30)
         strength_matches = prompt_strengths & set(entry.strengths)
@@ -991,24 +1063,33 @@ def find_catalog_entry(filename: str, catalog: list[ModelCatalogEntry] | None = 
     """Find a catalog entry that matches an installed checkpoint filename."""
     if catalog is None:
         catalog = MODEL_CATALOG
-    for entry in catalog:
-        if _model_name_matches(entry.filename, filename):
-            return entry
-    return None
+    return match_installed_file(filename, catalog)
 
 
-def resolve_installed_filename(entry: ModelCatalogEntry, inventory: ComfyUIInventory) -> str | None:
+def resolve_installed_filename(
+    entry: ModelCatalogEntry,
+    inventory: ComfyUIInventory,
+    catalog: list[ModelCatalogEntry] | None = None,
+) -> str | None:
     """
     Resolve the concrete installed filename for a catalog entry.
     Returns the exact filename seen in ComfyUI inventory, or None if not found.
-    """
-    if entry.family == "upscaler":
-        for up in inventory.upscale_models:
-            if _model_name_matches(entry.filename, up):
-                return up
-        return None
 
-    for ck in inventory.checkpoints:
-        if _model_name_matches(entry.filename, ck.filename):
-            return ck.filename
+    An installed file belongs to at most one entry (the most specific match), so a sibling
+    entry such as flux_dev_fp8 cannot claim the file that flux_dev owns.
+    """
+    if catalog is None:
+        catalog = MODEL_CATALOG
+    is_upscaler = entry.family == "upscaler"
+    # Compare only against entries of the same kind, and make sure `entry` itself competes
+    # even when it is not part of the default catalog.
+    competitors = [e for e in catalog if (e.family == "upscaler") == is_upscaler and e.id != entry.id]
+    competitors.append(entry)
+
+    installed_files = (
+        list(inventory.upscale_models) if is_upscaler else [ck.filename for ck in inventory.checkpoints]
+    )
+    for installed in installed_files:
+        if match_installed_file(installed, competitors) is entry:
+            return installed
     return None
