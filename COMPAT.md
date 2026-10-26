@@ -11,3 +11,9 @@ in `ez_comfy/compat.py`. `python -m ez_comfy check` warns (never fails) outside 
 
 To widen the range: run EZ Comfy against the new version, record the row above, then change the
 constant and this header together.
+
+## End-to-end runs
+
+| Date | Recipe | Settings | Result |
+|------|--------|----------|--------|
+| 2026-10-25 | `video_wan22_t2v` (Wan 2.2 14B fp8, plain mode) | 512x512, 17 frames, 10 steps, 16 fps, RTX 5070 Ti 16 GB, ComfyUI 0.42.0 | 128 s including model load; one MP4 (17 frames, 1.06 s, 377 KB); VRAM peaked at about 15.6 GiB (the card was full; the models offload to RAM), GPU 100 % and 58 C, 256 W peak |

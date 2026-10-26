@@ -1,0 +1,25 @@
+{
+  "_note": "Node outputs of a real ComfyUI 0.42.0 SaveVideo run (Wan 2.2 t2v, 512x512, 17 frames); ids and prompt removed.",
+  "outputs": {
+    "80": {
+      "images": [
+        {
+          "filename": "ezcomfy_wan22_00001_.mp4",
+          "subfolder": "video",
+          "type": "output",
+          "metadata": {
+            "kind": "video",
+            "width": 512,
+            "height": 512,
+            "duration": 1.0625,
+            "fps": 16.0,
+            "frame_count": 17
+          }
+        }
+      ],
+      "animated": [
+        true
+      ]
+    }
+  }
+}

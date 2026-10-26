@@ -4,7 +4,9 @@ Non-obvious choices, newest first. Each entry: date, decision, why.
 
 ## 2026-10-25 — Wan 2.2 text-to-video recipe (WI-5, part 1: planning, builder, outputs)
 
-**Not yet run on the GPU.** The recipe is verified against the shipped template graph and by unit tests only; the first real render (and measured VRAM/time) is the next step and updates this entry.
+**Run live on 2026-10-25** (RTX 5070 Ti, ComfyUI 0.42.0, through `python -m ez_comfy generate`): 512x512, 17 frames, 10 steps finished in 128 s including the cold model load and produced one MP4 (17 frames at 16 fps). VRAM peaked at about 15.6 GiB (the card was full, so the models offload to RAM), GPU 100 %, 58 C, 256 W peak. Recorded in `COMPAT.md`.
+
+**Live correction.** The spec (and my first implementation) said the video marker is `animated` on each image entry. In the real history entry `animated` is a list on the *node output*, parallel to `images`, and each file carries `metadata.kind == "video"`. `extract_outputs` was labelling the MP4 an image until the live check. It now accepts the metadata marker, the node-level `animated` list (or bool) and a video file extension, and is pinned by a fixture recorded from this run (`tests/fixtures/history/`).
 
 - **Golden graph.** `scripts/export_template_graph.py` flattens the shipped `video_wan2_2_14B_t2v.json` (a subgraph with a boolean "fast LoRA" switch) into API format by folding the primitive, switch and math helper nodes, using the live `/object_info` for widget order. The result, `tests/fixtures/workflows/wan22_t2v.api.json`, has 14 nodes and contains only public template file names and `PROMPT`/`NEGATIVE` placeholders. The builder is compared to it with `tests/golden.py`.
 - **Template default = plain mode, not the LoRA mode.** With the switch off the template runs one 20-step pass split at step 10 (high-noise expert 0-10, low-noise expert 10-20), cfg 3.5, shift 5, 16 fps, 81 frames, no extra LoRAs. That is what the builder and the `wan_video` profile now use (the earlier WI-3 profile had the 4-step LoRA numbers). The installed lightx2v 4-step LoRAs would make it about five times fewer steps; that is a follow-up variant, not wired.
@@ -14,8 +16,8 @@ Non-obvious choices, newest first. Each entry: date, decision, why.
 - **Frames and fps.** `GenerationRequest.video_frames/video_fps` were declared but unused (default 25/8) and are now `None` = family default (81 at 16 fps for Wan). Wan length must be 1 + 4n (the latent node's step is 4, read from live `/object_info`), so a request is snapped to the nearest valid value (ties up) with a warning. SVD ignores both, as before.
 - **Prompt group.** Modern natural-language families (`wan_video`, `ltx_video`, `qwen_image`, `hidream`, `flux2`, `flux3`) now share the `flux` style group so SDXL-style domain packs are not injected into video prompts.
 - **Default negative prompt** for Wan is the template's own (Chinese) text, stored as `_NEG_WAN` with its source cited.
-- **Outputs.** `extract_outputs` marks an `images` entry as video when its `animated` flag is true (bool or one-element list). Still images, audio and `gifs` are unchanged. Not yet verified against a recorded real history entry.
-- **Open before this is done:** the live render and measured numbers; the 300 s default timeout is almost certainly too short for a cold 14B load; the planner's 120 s video time estimate is a placeholder; catalog entries and `_intent_compatible_families` for video are untouched (WI-7b).
+- **Outputs.** See the live correction above; still images, audio and `gifs` are unchanged.
+- **Still open:** a full-size run (default 640x640, 81 frames, 20 steps) has not been timed, so the planner's 120 s video estimate is a placeholder and the plan only carries a warning to raise `--timeout` (default 300 s) instead of changing the default; the 4-step LoRA variant, image-to-video and LTX; catalog entries and `_intent_compatible_families` for video are untouched (WI-7b).
 
 ## 2026-10-25 — Classifier: modern families and `model_overrides` (WI-3)
 

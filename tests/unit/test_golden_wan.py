@@ -64,7 +64,8 @@ def test_plan_uses_the_wan_recipe_and_fills_every_role():
     assert plan.summary()["models"] == plan.models
     assert (plan.video_frames, plan.video_fps) == (81, 16)
     assert (plan.params.width, plan.params.height, plan.params.steps, plan.params.cfg_scale) == (640, 640, 20, 3.5)
-    assert not plan.warnings
+    assert [w for w in plan.warnings if "--timeout" not in w] == []   # only the slow-render notice
+    assert any("--timeout" in w for w in plan.warnings)
 
 
 def test_plan_records_why_svd_was_not_used():
@@ -222,17 +223,38 @@ def test_normalizer_detects_a_missing_node():
 # Video outputs
 # ---------------------------------------------------------------------------
 
-def _history(entry: dict) -> dict:
-    return {"outputs": {"80": {"images": [entry]}}}
+HISTORY_FIXTURE = Path(__file__).parent.parent / "fixtures" / "history" / "wan22_t2v_savevideo.json"
 
 
-@pytest.mark.parametrize("animated,expected", [([True], "video"), (True, "video"), ([False], "image"), (False, "image"), (None, "image")])
-def test_extract_outputs_marks_animated_images_as_video(animated, expected):
-    entry = {"filename": "ezcomfy.mp4", "subfolder": "video", "type": "output"}
+def _extract(history: dict) -> list[dict]:
+    return ComfyUIClient("http://comfy.test").extract_outputs(history)
+
+
+def test_real_savevideo_history_entry_is_labelled_video():
+    """Recorded from a live ComfyUI 0.42.0 run: `animated` sits on the node output, not on the file."""
+    history = json.loads(HISTORY_FIXTURE.read_text(encoding="utf-8"))
+    assert [o["media_type"] for o in _extract(history)] == ["video"]
+
+
+@pytest.mark.parametrize("entry,animated,expected", [
+    ({"filename": "a.bin", "metadata": {"kind": "video"}}, None, "video"),         # metadata signal alone
+    ({"filename": "a.bin"}, [True], "video"),                                        # animated list alone
+    ({"filename": "a.bin"}, True, "video"),                                          # animated bool alone
+    ({"filename": "a.MP4"}, None, "video"),                                          # extension alone
+    ({"filename": "a.png"}, [False], "image"),
+    ({"filename": "a.png"}, None, "image"),
+    ({"filename": "a.webp", "metadata": {"kind": "image"}}, [False], "image"),
+])
+def test_extract_outputs_video_signals(entry, animated, expected):
+    node = {"images": [{"subfolder": "", "type": "output", **entry}]}
     if animated is not None:
-        entry["animated"] = animated
-    outputs = ComfyUIClient("http://comfy.test").extract_outputs(_history(entry))
-    assert [o["media_type"] for o in outputs] == [expected]
+        node["animated"] = animated
+    assert [o["media_type"] for o in _extract({"outputs": {"80": node}})] == [expected]
+
+
+def test_animated_flags_apply_per_file():
+    node = {"images": [{"filename": "a.png"}, {"filename": "b.bin"}], "animated": [False, True]}
+    assert [o["media_type"] for o in _extract({"outputs": {"1": node}})] == ["image", "video"]
 
 
 def test_extract_outputs_keeps_gifs_audio_and_stills():
@@ -241,5 +263,5 @@ def test_extract_outputs_keeps_gifs_audio_and_stills():
         "2": {"audio": [{"filename": "a.flac", "subfolder": "", "type": "output"}]},
         "3": {"gifs": [{"filename": "a.gif", "subfolder": "", "type": "output"}]},
     }}
-    types = sorted(o["media_type"] for o in ComfyUIClient("http://comfy.test").extract_outputs(history))
+    types = sorted(o["media_type"] for o in _extract(history))
     assert types == ["audio", "image", "video"]

@@ -102,6 +102,25 @@ def _parse_binary_frame(raw: bytes) -> BinaryFrame | None:
     return None
 
 
+
+_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mkv", ".mov", ".avi")
+
+
+def _is_video_output(entry: dict, animated, index: int) -> bool:
+    """SaveVideo/PreviewVideo list their files under "images". ComfyUI 0.42.0 marks them with
+    metadata.kind == "video" on the entry and an `animated` list on the node output (parallel to
+    `images`); either signal, or a video file extension, is enough."""
+    metadata = entry.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("kind") == "video":
+        return True
+    if isinstance(animated, list):
+        if index < len(animated) and animated[index] is True:
+            return True
+    elif animated is True:
+        return True
+    return str(entry.get("filename", "")).lower().endswith(_VIDEO_EXTENSIONS)
+
+
 class ComfyUIClient:
     def __init__(self, base_url: str = "http://127.0.0.1:8188") -> None:
         self._base_url = base_url.rstrip("/")
@@ -403,11 +422,9 @@ class ComfyUIClient:
         """Extract output file references from a history entry."""
         outputs = []
         for node_id, node_output in history_entry.get("outputs", {}).items():
-            for img in node_output.get("images", []):
-                # SaveVideo/PreviewVideo list their files under "images" with animated=true.
-                animated = img.get("animated")
-                is_video = animated[0] if isinstance(animated, list) and animated else animated
-                outputs.append({**img, "media_type": "video" if is_video is True else "image"})
+            animated = node_output.get("animated")
+            for index, img in enumerate(node_output.get("images", [])):
+                outputs.append({**img, "media_type": "video" if _is_video_output(img, animated, index) else "image"})
             for audio in node_output.get("audio", []):
                 outputs.append({**audio, "media_type": "audio"})
             for video in node_output.get("gifs", []):

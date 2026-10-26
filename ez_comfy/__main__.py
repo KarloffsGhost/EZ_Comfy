@@ -214,6 +214,8 @@ async def _cmd_generate(args: argparse.Namespace) -> int:
         width=args.width,
         height=args.height,
         steps=args.steps,
+        video_frames=args.frames,
+        video_fps=args.fps,
         seed=args.seed,
         denoise_strength=args.denoise,
     )
@@ -324,6 +326,8 @@ def main() -> None:
     p_gen.add_argument("--width", type=int)
     p_gen.add_argument("--height", type=int)
     p_gen.add_argument("--steps", type=int)
+    p_gen.add_argument("--frames", type=int, help="Video length in frames (model default if omitted)")
+    p_gen.add_argument("--fps", type=int, help="Video frames per second (model default if omitted)")
     p_gen.add_argument("--seed", type=int, default=-1)
     p_gen.add_argument("--denoise", type=float, default=0.7)
     p_gen.add_argument("--timeout", type=float, default=300.0)
