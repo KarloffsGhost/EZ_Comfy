@@ -121,3 +121,81 @@ async def test_scan_inventory_reads_samplers_and_upscalers_in_both_shapes(wrap):
     assert inv.schedulers == ["normal", "karras"]
     assert inv.upscale_models == ["RealESRGAN_x4plus.safetensors"]
     assert [c.filename for c in inv.checkpoints] == ["x.safetensors"]
+
+
+# ---------------------------------------------------------------------------
+# WI-2: multi-loader scanning
+# ---------------------------------------------------------------------------
+
+_WAN_FILES = [
+    "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+    "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+]
+
+
+def _multi_loader_info(wrap) -> dict:
+    return {
+        "CheckpointLoaderSimple": {"input": {"required": {
+            "ckpt_name": wrap(["DreamShaper_8_pruned.safetensors", "SDXL\\sd_xl_base_1.0.safetensors"])}}},
+        "UNETLoader": {"input": {"required": {"unet_name": wrap(_WAN_FILES), "weight_dtype": wrap(["default"])}}},
+        "CLIPVisionLoader": {"input": {"required": {"clip_name": wrap(["clip_vision_h.safetensors"])}}},
+        "DualCLIPLoader": {"input": {"required": {
+            "clip_name1": wrap(["clip_l.safetensors", "t5xxl_fp8.safetensors"]),
+            "clip_name2": wrap(["t5xxl_fp8.safetensors", "clip_g.safetensors"]),
+        }}},
+    }
+
+
+@pytest.mark.parametrize("wrap", [
+    lambda options: [options, {}],
+    lambda options: ["COMBO", {"options": options}],
+], ids=["legacy", "combo"])
+async def test_scan_inventory_lists_other_loaders_in_both_shapes(wrap):
+    inv = await scan_inventory(_FakeClient(_multi_loader_info(wrap)))
+    assert [m.filename for m in inv.diffusion_models] == _WAN_FILES
+    assert all(m.loader == "diffusion_model" for m in inv.diffusion_models)
+    assert inv.clip_vision_models == ["clip_vision_h.safetensors"]
+    assert inv.dual_clip_models == ["clip_l.safetensors", "t5xxl_fp8.safetensors", "clip_g.safetensors"]
+
+
+async def test_checkpoints_never_contain_diffusion_models():
+    inv = await scan_inventory(_FakeClient(_multi_loader_info(lambda o: [o, {}])))
+    assert all(m.loader == "checkpoint" for m in inv.checkpoints)
+    assert not {m.filename for m in inv.checkpoints} & set(_WAN_FILES)
+
+
+async def test_folder_is_recorded_for_files_in_a_subfolder():
+    inv = await scan_inventory(_FakeClient(_multi_loader_info(lambda o: [o, {}])))
+    by_name = {m.filename: m for m in inv.checkpoints}
+    assert by_name["SDXL\\sd_xl_base_1.0.safetensors"].folder == "SDXL"
+    assert by_name["DreamShaper_8_pruned.safetensors"].folder is None
+
+
+async def test_missing_unetloader_is_not_fatal():
+    info = _multi_loader_info(lambda o: [o, {}])
+    del info["UNETLoader"], info["DualCLIPLoader"], info["CLIPVisionLoader"]
+    inv = await scan_inventory(_FakeClient(info))
+    assert inv.diffusion_models == [] and inv.dual_clip_models == [] and inv.clip_vision_models == []
+    assert len(inv.checkpoints) == 2
+
+
+async def test_all_models_orders_checkpoints_before_diffusion_models():
+    inv = await scan_inventory(_FakeClient(_multi_loader_info(lambda o: [o, {}])))
+    names = [m.filename for m in inv.all_models()]
+    assert names == ["DreamShaper_8_pruned.safetensors", "SDXL\\sd_xl_base_1.0.safetensors", *_WAN_FILES]
+    assert [m.filename for m in inv.models_for_loader("diffusion_model")] == _WAN_FILES
+
+
+def test_inventory_response_includes_new_optional_fields_and_keeps_old_ones():
+    from ez_comfy.api.routes import _inventory_response
+    from ez_comfy.hardware.comfyui_inventory import ComfyUIInventory, ModelInfo
+
+    inv = ComfyUIInventory(
+        checkpoints=[ModelInfo("a.safetensors", 0, "sd15")],
+        diffusion_models=[ModelInfo("wan.safetensors", 0, "unknown", loader="diffusion_model")],
+        clip_vision_models=["cv.safetensors"], dual_clip_models=["d.safetensors"],
+    )
+    response = _inventory_response(inv)
+    assert response.diffusion_models == ["wan.safetensors"]
+    assert response.clip_vision_models == ["cv.safetensors"] and response.dual_clip_models == ["d.safetensors"]
+    assert [c["filename"] for c in response.checkpoints] == ["a.safetensors"]

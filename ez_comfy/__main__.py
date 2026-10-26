@@ -82,6 +82,10 @@ async def _cmd_check(args: argparse.Namespace) -> int:
         print(f"  • {c.filename}  [{c.family}]  {c.size_bytes / 1e9:.1f}GB")
     if len(inv.checkpoints) > 10:
         print(f"  … and {len(inv.checkpoints) - 10} more")
+    if inv.diffusion_models:
+        print(f"Diffusion models (UNETLoader; listed, not yet selectable): {len(inv.diffusion_models)}")
+        for m in inv.diffusion_models[:10]:
+            print(f"  - {m.filename}  [{m.family}]")
     print(f"LoRAs       : {len(inv.loras)}")
     print(f"VAEs        : {len(inv.vaes)}")
     print(f"Upscalers   : {len(inv.upscale_models)}")

@@ -2,6 +2,15 @@
 
 Non-obvious choices, newest first. Each entry: date, decision, why.
 
+## 2026-10-25 — Multi-loader scanning and the loader guard (WI-2, rest)
+
+- **Verified live:** `check` lists 6 `UNETLoader` files (four Wan 2.2 14B files plus two `xl-inpaint-0.1\diffusion_pytorch_model*` files) under diffusion models; checkpoints stay at 7. The Wan files classify as `unknown` until WI-3.
+- **`checkpoints` stays checkpoint-loader only.** New lists (`diffusion_models`, `clip_vision_models`, `dual_clip_models`) are separate, so existing consumers (API, engine, catalog) see no change.
+- **The guard is enforced at selection, not only by list placement.** The planner and `resolve_installed_filename` take `inventory.models_for_loader("checkpoint")`, so a UNET file that ended up in `checkpoints` through a future scan bug would still not be selected (tested). An explicit `--checkpoint` naming a diffusion-model file is not treated as installed.
+- **Selection happens before recipe choice** (planner steps 3 and 5), so the guard uses the one loader every current builder uses. `Recipe.model_loader` exists now and a recipe that needs another loader adds a warning; recipe-aware model selection is deferred to WI-5/6, which are the first to add such recipes.
+- **Fallback prefers a known family** over the first file; if every file is unknown it still takes the first.
+- **Not done here:** `ModelInfo.size_bytes` is still 0 (no API for it), so `check` prints `0.0GB`. The two `xl-inpaint` files are classified `sdxl` by name; that is WI-3's call.
+
 ## 2026-10-25 — Config diagnostics, version tracking, fixture capture (WI-1)
 
 - **Warn, don't override.** `check` warns when an explicit `model_base_path` is missing and suggests ComfyUI Desktop's current folder (live: `G:/Documents/ComfyUI/models` missing, suggests `J:\Documents\ComfyUI\models`). `detect_comfyui` keeps its explicit-input semantics, so the existing tests are unchanged.

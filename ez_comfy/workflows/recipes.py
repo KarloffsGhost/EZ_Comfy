@@ -21,6 +21,9 @@ class Recipe:
     supports_controlnet: bool
     builder: str                         # function name in workflow builders
     settings_overrides: dict | None = None
+    # Loader node the recipe feeds its model into (see ModelInfo.loader). Every current
+    # builder uses CheckpointLoaderSimple.
+    model_loader: str = "checkpoint"
 
 
 # ---------------------------------------------------------------------------

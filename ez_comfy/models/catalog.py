@@ -1098,7 +1098,9 @@ def resolve_installed_filename(
         competitors.append(entry)
 
     installed_files = (
-        list(inventory.upscale_models) if is_upscaler else [ck.filename for ck in inventory.checkpoints]
+        list(inventory.upscale_models)
+        if is_upscaler
+        else [ck.filename for ck in inventory.models_for_loader("checkpoint")]
     )
     return _installed_owners(installed_files, competitors).get(entry.id)
 

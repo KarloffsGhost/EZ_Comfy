@@ -45,6 +45,14 @@ class ModelInfo:
     size_bytes: int
     family: str
     variant: str | None = None
+    # Which ComfyUI loader node can load this file: "checkpoint" (CheckpointLoaderSimple) or
+    # "diffusion_model" (UNETLoader). Sending a file to the wrong loader fails at run time.
+    loader: str = "checkpoint"
+    folder: str | None = None   # sub-folder inside the models folder, e.g. "SDXL"
+
+
+CHECKPOINT_LOADER = "checkpoint"
+DIFFUSION_MODEL_LOADER = "diffusion_model"
 
 
 @dataclass
@@ -66,6 +74,19 @@ class ComfyUIInventory:
     discovered_class_types: set[str] = field(default_factory=set)
     samplers: list[str] = field(default_factory=list)
     schedulers: list[str] = field(default_factory=list)
+    # Files only UNETLoader / CLIPVisionLoader / DualCLIPLoader can load. `checkpoints` keeps
+    # holding checkpoint-loader files only, so existing consumers never see these.
+    diffusion_models: list[ModelInfo] = field(default_factory=list)
+    clip_vision_models: list[str] = field(default_factory=list)
+    dual_clip_models: list[str] = field(default_factory=list)
+
+    def all_models(self) -> list[ModelInfo]:
+        """Checkpoints then diffusion models, for display and matching (not for loader selection)."""
+        return [*self.checkpoints, *self.diffusion_models]
+
+    def models_for_loader(self, loader: str) -> list[ModelInfo]:
+        """Only the files the given loader can load."""
+        return [model for model in self.all_models() if model.loader == loader]
 
 
 async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
@@ -102,9 +123,18 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
     inventory.samplers = _extract_list(all_info, "KSampler", "sampler_name")
     inventory.schedulers = _extract_list(all_info, "KSampler", "scheduler")
 
+    # Files that only other loaders can load (Wan/Flux/Qwen-style diffusion models, CLIP vision, dual CLIP)
+    inventory.diffusion_models = _get_diffusion_models(all_info)
+    inventory.clip_vision_models = _extract_list(all_info, "CLIPVisionLoader", "clip_name")
+    inventory.dual_clip_models = _merge_unique(
+        _extract_list(all_info, "DualCLIPLoader", "clip_name1"),
+        _extract_list(all_info, "DualCLIPLoader", "clip_name2"),
+    )
+
     logger.info(
-        "Inventory: %d checkpoints, %d LoRAs, %d VAEs, %d upscalers, %d custom class_types",
+        "Inventory: %d checkpoints, %d diffusion models, %d LoRAs, %d VAEs, %d upscalers, %d custom class_types",
         len(inventory.checkpoints),
+        len(inventory.diffusion_models),
         len(inventory.loras),
         len(inventory.vaes),
         len(inventory.upscale_models),
@@ -118,8 +148,36 @@ async def _get_checkpoints(client: ComfyUIClient, all_info: dict) -> list[ModelI
     results = []
     for name in names:
         family, variant = classify_checkpoint(name)
-        results.append(ModelInfo(filename=name, size_bytes=0, family=family, variant=variant))
+        results.append(ModelInfo(
+            filename=name, size_bytes=0, family=family, variant=variant,
+            loader=CHECKPOINT_LOADER, folder=_folder_of(name),
+        ))
     return results
+
+
+def _get_diffusion_models(all_info: dict) -> list[ModelInfo]:
+    results = []
+    for name in _extract_list(all_info, "UNETLoader", "unet_name"):
+        family, variant = classify_checkpoint(name)
+        results.append(ModelInfo(
+            filename=name, size_bytes=0, family=family, variant=variant,
+            loader=DIFFUSION_MODEL_LOADER, folder=_folder_of(name),
+        ))
+    return results
+
+
+def _folder_of(filename: str) -> str | None:
+    """'SDXL\\base.safetensors' -> 'SDXL'; a bare file name -> None."""
+    parts = filename.replace("\\", "/").rsplit("/", 1)
+    return parts[0] if len(parts) == 2 else None
+
+
+def _merge_unique(*lists: list[str]) -> list[str]:
+    seen: dict[str, None] = {}
+    for items in lists:
+        for item in items:
+            seen.setdefault(item, None)
+    return list(seen)
 
 
 async def _get_loras(client: ComfyUIClient, all_info: dict) -> list[LoRAInfo]:

@@ -140,6 +140,10 @@ class InventoryResponse(BaseModel):
     samplers: list[str]
     schedulers: list[str]
     discovered_capabilities: list[str]
+    # Additive: files other loaders can load. Never selected for generation yet.
+    diffusion_models: list[str] = Field(default_factory=list)
+    clip_vision_models: list[str] = Field(default_factory=list)
+    dual_clip_models: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

@@ -478,9 +478,7 @@ async def cancel_job(request: Request, job_id: str) -> dict:
 # Inventory
 # ---------------------------------------------------------------------------
 
-@router.get("/v1/inventory", response_model=InventoryResponse)
-async def inventory(request: Request) -> InventoryResponse:
-    inv = request.app.state.inventory
+def _inventory_response(inv) -> InventoryResponse:
     return InventoryResponse(
         checkpoints=[{"filename": c.filename, "family": c.family, "size_gb": round(c.size_bytes / 1e9, 2)} for c in inv.checkpoints],
         loras=[{"filename": l.filename, "families": l.compatible_families, "ambiguous": l.ambiguous} for l in inv.loras],
@@ -489,7 +487,15 @@ async def inventory(request: Request) -> InventoryResponse:
         samplers=inv.samplers,
         schedulers=inv.schedulers,
         discovered_capabilities=sorted(inv.discovered_class_types),
+        diffusion_models=[m.filename for m in inv.diffusion_models],
+        clip_vision_models=list(inv.clip_vision_models),
+        dual_clip_models=list(inv.dual_clip_models),
     )
+
+
+@router.get("/v1/inventory", response_model=InventoryResponse)
+async def inventory(request: Request) -> InventoryResponse:
+    return _inventory_response(request.app.state.inventory)
 
 
 @router.post("/v1/inventory/refresh", response_model=InventoryResponse)
@@ -497,15 +503,7 @@ async def refresh_inventory(request: Request) -> InventoryResponse:
     engine = _engine(request)
     inv = await engine.refresh_inventory()
     request.app.state.inventory = inv
-    return InventoryResponse(
-        checkpoints=[{"filename": c.filename, "family": c.family, "size_gb": round(c.size_bytes / 1e9, 2)} for c in inv.checkpoints],
-        loras=[{"filename": l.filename, "families": l.compatible_families, "ambiguous": l.ambiguous} for l in inv.loras],
-        vaes=inv.vaes,
-        upscale_models=inv.upscale_models,
-        samplers=inv.samplers,
-        schedulers=inv.schedulers,
-        discovered_capabilities=sorted(inv.discovered_class_types),
-    )
+    return _inventory_response(inv)
 
 
 # ---------------------------------------------------------------------------

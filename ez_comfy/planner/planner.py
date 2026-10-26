@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ez_comfy.hardware.probe import HardwareProfile
-from ez_comfy.hardware.comfyui_inventory import ComfyUIInventory
+from ez_comfy.hardware.comfyui_inventory import CHECKPOINT_LOADER, ComfyUIInventory
 from ez_comfy.models.catalog import (
     MODEL_CATALOG, ModelCatalogEntry, ModelRecommendation,
     find_catalog_entry, recommend_models, resolve_installed_filename,
@@ -156,6 +156,11 @@ def plan_generation(
     # 5. Select workflow recipe
     recipe, missing_caps, recipe_decision = _select_recipe(request, intent, inventory, warnings)
     provenance.add(recipe_decision)
+    if recipe.model_loader != CHECKPOINT_LOADER:
+        warnings.append(
+            f"Recipe '{recipe.name}' needs a {recipe.model_loader!r} model but the planner only "
+            "selects checkpoint-loader files today; generation may fail."
+        )
 
     # 6. Adapt prompt
     style_preset_obj = get_style_preset(request.style_preset)
@@ -266,6 +271,9 @@ def _select_checkpoint(
     Returns (checkpoint_filename, catalog_entry, decisions).
     """
     decisions: list[Decision] = []
+    # Every current builder feeds CheckpointLoaderSimple, so only files that loader can load
+    # are candidates; diffusion-model (UNETLoader) files are listed but never selected here.
+    loadable = inventory.models_for_loader(CHECKPOINT_LOADER)
 
     if request.checkpoint_override:
         override = request.checkpoint_override
@@ -284,7 +292,7 @@ def _select_checkpoint(
                 return installed, entry, decisions
 
         # If user supplied an exact installed filename, pass it through.
-        for ck in inventory.checkpoints:
+        for ck in loadable:
             if ck.filename == override:
                 decisions.append(Decision(
                     parameter="checkpoint",
@@ -343,8 +351,9 @@ def _select_checkpoint(
         return chosen_filename, chosen_rec.entry, decisions
 
     # No recommended model installed — use first available checkpoint
-    if inventory.checkpoints:
-        ck = inventory.checkpoints[0]
+    if loadable:
+        # Prefer a model we can classify over an arbitrary first file.
+        ck = next((m for m in loadable if m.family != "unknown"), loadable[0])
         warnings.append(
             f"No recommended model installed. Using {ck.filename!r}. "
             "Consider installing a model from the catalog."
