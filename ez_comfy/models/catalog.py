@@ -66,6 +66,7 @@ class ModelRecommendation:
     fits_vram: bool
     match_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    installed_filename: str | None = None  # exact file ComfyUI lists (None if not installed)
 
 
 # ---------------------------------------------------------------------------
@@ -865,11 +866,6 @@ def _intent_compatible_families(intent_str: str) -> set[str]:
     return {"sd15", "sdxl", "flux", "sd3", "cascade", "pony"}
 
 
-def _is_installed(entry: ModelCatalogEntry, inventory: ComfyUIInventory) -> bool:
-    """Check if catalog entry's checkpoint is installed."""
-    return resolve_installed_filename(entry, inventory) is not None
-
-
 _MODEL_FILE_EXTENSIONS = (".safetensors", ".ckpt", ".pth", ".pt", ".bin", ".gguf")
 
 
@@ -1002,7 +998,8 @@ def recommend_models(
             continue
 
         fits_vram = entry.vram_min_gb <= hardware.gpu_vram_gb
-        installed = _is_installed(entry, inventory)
+        installed_filename = resolve_installed_filename(entry, inventory)
+        installed = installed_filename is not None
         reasons: list[str] = []
         warnings: list[str] = []
         score = 0.0
@@ -1045,6 +1042,7 @@ def recommend_models(
             fits_vram=fits_vram,
             match_reasons=reasons,
             warnings=warnings,
+            installed_filename=installed_filename,
         ))
 
     # Sort by score, then prefer installed

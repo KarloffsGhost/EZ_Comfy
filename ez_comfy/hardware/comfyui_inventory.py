@@ -99,10 +99,8 @@ async def scan_inventory(client: ComfyUIClient) -> ComfyUIInventory:
     inventory.controlnet_models = _extract_list(all_info, "ControlNetLoader", "control_net_name")
 
     # Samplers and schedulers
-    ksampler = all_info.get("KSampler", {})
-    required = ksampler.get("input", {}).get("required", {})
-    inventory.samplers = required.get("sampler_name", [[]])[0] if "sampler_name" in required else []
-    inventory.schedulers = required.get("scheduler", [[]])[0] if "scheduler" in required else []
+    inventory.samplers = _extract_list(all_info, "KSampler", "sampler_name")
+    inventory.schedulers = _extract_list(all_info, "KSampler", "scheduler")
 
     logger.info(
         "Inventory: %d checkpoints, %d LoRAs, %d VAEs, %d upscalers, %d custom class_types",
@@ -134,11 +132,35 @@ async def _get_loras(client: ComfyUIClient, all_info: dict) -> list[LoRAInfo]:
 
 
 def _extract_list(all_info: dict, node_class: str, input_key: str) -> list[str]:
-    node = all_info.get(node_class, {})
+    """Return a combo input's option list from an /object_info dump.
+
+    ComfyUI emits two shapes for combo inputs and both are live in 0.42:
+      legacy: [["a.safetensors", "b.safetensors"], {...}]
+      COMBO:  ["COMBO", {"options": ["a.safetensors", "b.safetensors"], ...}]  (e.g. UpscaleModelLoader)
+    A missing node or input yields []; an unrecognised shape is logged and yields [].
+    """
+    node = all_info.get(node_class)
+    if not node:
+        logger.debug("%s not in /object_info; no %s options", node_class, input_key)
+        return []
     required = node.get("input", {}).get("required", {})
-    entry = required.get(input_key, [[]])
-    if entry and isinstance(entry[0], list):
-        return entry[0]
+    if input_key not in required:
+        logger.debug("%s has no required input %r; no options", node_class, input_key)
+        return []
+
+    entry = required[input_key]
+    if isinstance(entry, list) and entry:
+        first = entry[0]
+        if isinstance(first, list):
+            return first
+        if first == "COMBO" and len(entry) > 1 and isinstance(entry[1], dict):
+            options = entry[1].get("options")
+            if isinstance(options, list):
+                return options
+
+    logger.warning(
+        "Unrecognised combo shape for %s.%s: %.120r", node_class, input_key, entry
+    )
     return []
 
 

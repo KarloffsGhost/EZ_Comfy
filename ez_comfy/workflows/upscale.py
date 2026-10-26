@@ -5,10 +5,15 @@ from ez_comfy.workflows.txt2img import _checkpoint_nodes, _lora_chain, _vae_node
 
 
 def _get_upscale_model_name(plan: GenerationPlan) -> str:
-    """Return the first installed upscale model from recommendations, or a safe default."""
+    """Return the first installed upscale model from recommendations, or a safe default.
+
+    Uses the exact filename ComfyUI lists (e.g. "RealESRGAN_x4plus.safetensors"); the catalog
+    token has no extension and would be rejected by UpscaleModelLoader.
+    """
     for rec in plan.recommendations:
         if rec.entry.family == "upscaler" and rec.installed:
-            return rec.entry.filename
+            exact = getattr(rec, "installed_filename", None)
+            return exact if isinstance(exact, str) and exact else rec.entry.filename
     return "RealESRGAN_x4plus.pth"
 
 

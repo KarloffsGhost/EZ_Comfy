@@ -2,6 +2,16 @@
 
 Non-obvious choices, newest first. Each entry: date, decision, why.
 
+## 2026-10-24 — Tolerant combo parsing and exact upscaler filenames (WI-2 item 1, pulled forward)
+
+**Decision.** `_extract_list` accepts both combo shapes (`[[options], {...}]` and `["COMBO", {"options": [...]}]`), warns on any other shape, and is used for samplers/schedulers too. `ModelRecommendation` gained `installed_filename` (defaulted), and the upscale builder sends that exact name when present.
+
+**Why.** On ComfyUI 0.42 `UpscaleModelLoader` is the COMBO shape, so the old parser returned `[]` and EZ_Comfy reported no upscalers installed; the builder also sent an extensionless catalog token while the installed file is `RealESRGAN_x4plus.safetensors`. This corrects V1 (earlier "all legacy" covered only core V1 loaders). `KSampler` `sampler_name`/`scheduler` are legacy shape (45 samplers, 9 schedulers parse live).
+
+**Verified live (read-only).** `scan_inventory` against `http://127.0.0.1:8000` now lists `RealESRGAN_x4plus.safetensors`.
+
+**Compatibility.** The upscale builder still keys on `rec.installed` and falls back to the catalog token when no exact name is recorded, so existing tests and mock-based callers are unchanged. The `.pth` fallback when nothing is installed is left as is.
+
 ## 2026-10-24 — Independent review of the spec and WI-7a (Opus reviewer), and what changed
 
 Fixed in the WI-7a follow-up commit:
